@@ -120,24 +120,20 @@ async def setup():
             );
         """)
         logging.info("Checked/Created 'confessions' table.")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_confessions_categories ON confessions USING gin(categories);")
-        logging.info("Checked/Created GIN index on 'confessions.categories'.")
-
-        # --- Comments Table Schema ---
+        
+        # Ensure photo_file_id column exists (for backward compatibility)
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS comments (
-                id SERIAL PRIMARY KEY,
-                confession_id INTEGER REFERENCES confessions(id) ON DELETE CASCADE,
-                user_id BIGINT NOT NULL,
-                text TEXT NULL,
-                sticker_file_id TEXT NULL,
-                animation_file_id TEXT NULL,
-                parent_comment_id INTEGER REFERENCES comments(id) ON DELETE SET NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                CONSTRAINT one_content_type CHECK (num_nonnulls(text, sticker_file_id, animation_file_id) = 1)
-            );
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='confessions' AND column_name='photo_file_id') THEN
+                    ALTER TABLE confessions ADD COLUMN photo_file_id TEXT NULL;
+                END IF;
+            END $$;
         """)
-        logging.info("Checked/Created 'comments' table.")
+        logging.info("Ensured photo_file_id column exists.")
+        
+        # ... rest of your existing setup code ...
 
         # --- Reactions Table ---
         await conn.execute("""
@@ -946,26 +942,42 @@ async def receive_photo_confession(message: types.Message, state: FSMContext):
     await process_confession(message, state, text=text, photo_file_id=photo_file_id)
 
 async def process_confession(message: types.Message, state: FSMContext, text: str, photo_file_id: Optional[str] = None):
-    conf_text = text; user_id = message.from_user.id; state_data = await state.get_data(); selected_categories: List[str] = state_data.get("selected_categories", [])
+    conf_text = text
+    user_id = message.from_user.id
+    state_data = await state.get_data()
+    selected_categories: List[str] = state_data.get("selected_categories", [])
+    
     if not selected_categories:
-        await message.answer("⚠️ Error: Category info lost. Please start again with /confess."); await state.clear(); return
-    if len(conf_text) < 10: await message.answer("Confession too short (min 10 chars)."); return
-    if len(conf_text) > 3900: await message.answer(f"Confession too long (max 3900 chars)."); return
+        await message.answer("⚠️ Error: Category info lost. Please start again with /confess.")
+        await state.clear()
+        return
+    
+    if len(conf_text) < 10:
+        await message.answer("Confession too short (min 10 chars).")
+        return
+    
+    if len(conf_text) > 3900:
+        await message.answer(f"Confession too long (max 3900 chars).")
+        return
+    
     try:
         async with db.acquire() as conn:
             async with conn.transaction():
-                # Handle photo confession insert
+                # FIX: Convert Python list to PostgreSQL array using CAST
                 if photo_file_id:
                     conf_id = await conn.fetchval(
-                        "INSERT INTO confessions (text, user_id, categories, status, photo_file_id) VALUES ($1, $2, $3, 'pending', $4) RETURNING id", 
+                        "INSERT INTO confessions (text, user_id, categories, status, photo_file_id) VALUES ($1, $2, $3::text[], 'pending', $4) RETURNING id", 
                         conf_text, user_id, selected_categories, photo_file_id
                     )
                 else:
                     conf_id = await conn.fetchval(
-                        "INSERT INTO confessions (text, user_id, categories, status) VALUES ($1, $2, $3, 'pending') RETURNING id", 
+                        "INSERT INTO confessions (text, user_id, categories, status) VALUES ($1, $2, $3::text[], 'pending') RETURNING id", 
                         conf_text, user_id, selected_categories
                     )
-                if not conf_id: raise Exception("Failed to get confession ID")
+                
+                if not conf_id:
+                    raise Exception("Failed to get confession ID")
+                
                 await update_user_points(conn, user_id, POINTS_PER_CONFESSION)
         
         category_tags = " ".join([f"#{html.quote(cat)}" for cat in selected_categories])
@@ -1000,69 +1012,149 @@ async def process_confession(message: types.Message, state: FSMContext, text: st
                 f"<i>An admin will review it shortly. You'll be notified when it's approved.</i>"
             )
         else:
-            # Text-only confession (existing code)
-            admin_msg_text = f"<b>New Confession Review</b>\n<b>ID:</b> {conf_id}\n<b>Categories:</b> {category_tags}\n<b>User ID:</b> <code>{user_id}</code>\n\n<b>Text:</b>\n{html.quote(conf_text)}"
-            kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Approve", callback_data=f"approve_{conf_id}")], [InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_{conf_id}")]])
+            # Text-only confession
+            admin_msg_text = (
+                f"<b>New Confession Review</b>\n"
+                f"<b>ID:</b> {conf_id}\n"
+                f"<b>Categories:</b> {category_tags}\n"
+                f"<b>User ID:</b> <code>{user_id}</code>\n\n"
+                f"<b>Text:</b>\n{html.quote(conf_text)}"
+            )
+            
+            kbd = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Approve", callback_data=f"approve_{conf_id}")],
+                [InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_{conf_id}")]
+            ])
+            
             await bot.send_message(ADMIN_ID, admin_msg_text, reply_markup=kbd)
             await message.answer("✅ Your confession has been submitted and is pending review.")
         
-        logging.info(f"Confession #{conf_id} (Photo: {bool(photo_file_id)}, Categories: {', '.join(selected_categories)}) submitted by User ID {user_id}")
+        logging.info(f"Confession #{conf_id} (Photo: {bool(photo_file_id)}) submitted by User ID {user_id}")
+        
     except Exception as e:
         logging.error(f"Error processing confession from {user_id}: {e}", exc_info=True)
-        await message.answer("An internal error occurred.")
-    finally: await state.clear()
-
+        await message.answer(f"❌ Error: {str(e)[:100]}")
+        
+    finally: 
+        await state.clear()
 
 # --- Admin Action Handlers ---
-# *** FIX: Make lambda filter more specific to avoid conflict with contact requests ***
-@dp.callback_query(lambda c: c.data.startswith(("approve_", "reject_")) and len(c.data.split("_")) == 2 and c.data.split("_")[1].isdigit())
-async def admin_action(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_ID: await callback_query.answer("Unauthorized.", show_alert=True); return
-    action, conf_id_str = callback_query.data.split("_", 1); conf_id = int(conf_id_str)
+@dp.callback_query(F.data.startswith("approve_"))
+async def handle_approve_confession(callback_query: types.CallbackQuery, state: FSMContext):
+    """Handle approve button for confessions"""
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer("Unauthorized.", show_alert=True)
+        return
+    
+    try:
+        # Get confession ID from callback data (approve_123)
+        conf_id = int(callback_query.data.split("_")[1])
+    except (IndexError, ValueError):
+        await callback_query.answer("Invalid confession ID.", show_alert=True)
+        return
     
     async with db.acquire() as conn:
-        conf = await conn.fetchrow("SELECT id, text, user_id, categories, status, photo_file_id FROM confessions WHERE id = $1", conf_id)
-        if not conf: await callback_query.answer("Confession not found.", show_alert=True); return
-        if conf['status'] != 'pending': await callback_query.answer(f"Already '{conf['status']}'.", show_alert=True); return
-
-        if action == "approve":
-            try:
-                link = f"https://t.me/{bot_info.username}?start=view_{conf['id']}"
-                category_tags = " ".join([f"#{html.quote(cat)}" for cat in conf['categories'] or []])
-                
-                # Check if it's a photo confession
-                if conf['photo_file_id']:
-                    # Post photo confession to channel
-                    channel_caption = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
-                    channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
-                    
-                    msg = await bot.send_photo(
-                        chat_id=CHANNEL_ID,
-                        photo=conf['photo_file_id'],
-                        caption=channel_caption,
-                        reply_markup=channel_kbd
-                    )
-                else:
-                    # Post text confession to channel
-                    channel_post_text = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
-                    channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
-                    msg = await bot.send_message(CHANNEL_ID, channel_post_text, reply_markup=channel_kbd)
-                
-                await conn.execute("UPDATE confessions SET status = 'approved', message_id = $1 WHERE id = $2", msg.message_id, conf_id)
-                await safe_send_message(conf['user_id'], f"✅ Your confession (#{conf_id}) has been approved!")
-                await callback_query.message.edit_text(callback_query.message.html_text + "\n\n-- Approved --", reply_markup=None)
-                await callback_query.answer(f"Confession #{conf_id} approved.")
-            except Exception as e: logging.error(f"Error approving Confession {conf_id}: {e}", exc_info=True); await callback_query.answer(f"Error: {e}", show_alert=True)
-        elif action == "reject":
-            await state.update_data(
-                rejecting_conf_id=conf_id,
-                original_admin_text=callback_query.message.html_text,
-                admin_review_message_id=callback_query.message.message_id
+        conf = await conn.fetchrow(
+            "SELECT id, text, user_id, categories, status, photo_file_id FROM confessions WHERE id = $1", 
+            conf_id
+        )
+        
+        if not conf:
+            await callback_query.answer("Confession not found.", show_alert=True)
+            return
+        
+        if conf['status'] != 'pending':
+            await callback_query.answer(f"Already '{conf['status']}'.", show_alert=True)
+            return
+    
+    try:
+        link = f"https://t.me/{bot_info.username}?start=view_{conf['id']}"
+        category_tags = " ".join([f"#{html.quote(cat)}" for cat in conf['categories'] or []])
+        
+        # Check if it's a photo confession
+        if conf['photo_file_id']:
+            # Post photo confession to channel
+            channel_caption = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
+            channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)
+            ]])
+            
+            msg = await bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=conf['photo_file_id'],
+                caption=channel_caption,
+                reply_markup=channel_kbd
             )
-            await state.set_state(AdminActions.waiting_for_rejection_reason)
-            reason_keyboard = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/skip")], [KeyboardButton(text="/cancel")]], resize_keyboard=True, one_time_keyboard=True)
-            await callback_query.answer("❓ Provide rejection reason")
-            await bot.send_message(callback_query.from_user.id, f"Reason for rejecting Confession #{conf_id}?\nUse /skip or /cancel.", reply_markup=reason_keyboard)
+        else:
+            # Post text confession to channel
+            channel_post_text = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
+            channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)
+            ]])
+            
+            msg = await bot.send_message(CHANNEL_ID, channel_post_text, reply_markup=channel_kbd)
+        
+        # Update database
+        async with db.acquire() as conn:
+            await conn.execute(
+                "UPDATE confessions SET status = 'approved', message_id = $1 WHERE id = $2",
+                msg.message_id, conf_id
+            )
+        
+        # Notify user
+        await safe_send_message(conf['user_id'], f"✅ Your confession (#{conf_id}) has been approved!")
+        
+        # Update admin message
+        await callback_query.message.edit_text(
+            callback_query.message.html_text + "\n\n-- ✅ Approved --",
+            reply_markup=None
+        )
+        
+        await callback_query.answer(f"Confession #{conf_id} approved.")
+        
+    except Exception as e:
+        logging.error(f"Error approving Confession {conf_id}: {e}", exc_info=True)
+        await callback_query.answer(f"Error: {str(e)[:100]}", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("reject_"))
+async def handle_reject_confession(callback_query: types.CallbackQuery, state: FSMContext):
+    """Handle reject button for confessions - starts rejection process"""
+    if callback_query.from_user.id != ADMIN_ID:
+        await callback_query.answer("Unauthorized.", show_alert=True)
+        return
+    
+    try:
+        # Get confession ID from callback data (reject_123)
+        conf_id = int(callback_query.data.split("_")[1])
+    except (IndexError, ValueError):
+        await callback_query.answer("Invalid confession ID.", show_alert=True)
+        return
+    
+    # Start rejection process
+    await state.update_data(
+        rejecting_conf_id=conf_id,
+        original_admin_text=callback_query.message.html_text,
+        admin_review_message_id=callback_query.message.message_id
+    )
+    
+    await state.set_state(AdminActions.waiting_for_rejection_reason)
+    
+    reason_keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="/skip")],
+            [KeyboardButton(text="/cancel")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    
+    await callback_query.answer("❓ Provide rejection reason")
+    await bot.send_message(
+        callback_query.from_user.id,
+        f"Reason for rejecting Confession #{conf_id}?\nUse /skip or /cancel.",
+        reply_markup=reason_keyboard
+    )
 
 @dp.message(AdminActions.waiting_for_rejection_reason, F.text)
 async def receive_rejection_reason(message: types.Message, state: FSMContext):
@@ -1576,3 +1668,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("Bot stopped by user.")
+
