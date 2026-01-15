@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup,
-    KeyboardButton, ReplyKeyboardRemove, ForceReply
+    KeyboardButton, ReplyKeyboardRemove, ForceReply, InputMediaPhoto
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from datetime import datetime, timedelta
@@ -32,6 +32,7 @@ POINTS_PER_CONFESSION = 1
 POINTS_PER_LIKE_RECEIVED = 3
 POINTS_PER_DISLIKE_RECEIVED = -3
 MAX_CATEGORIES = 3 # Maximum categories allowed per confession
+MAX_PHOTO_SIZE_MB = 5  # Maximum photo size in MB
 
 # Load environment variables at the top level
 load_dotenv()
@@ -112,6 +113,7 @@ async def setup():
                 user_id BIGINT NOT NULL,
                 status VARCHAR(10) DEFAULT 'pending',
                 message_id BIGINT,
+                photo_file_id TEXT NULL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 rejection_reason TEXT NULL,
                 categories TEXT[] NULL
@@ -497,8 +499,8 @@ async def show_rules(message: types.Message):
         "2.  <b>Respectful Communication:</b> Sensitive topics (political, religious, cultural, etc.) are allowed but must be discussed with respect.\n\n"
         "3.  <b>No Harmful Content:</b> You may mention names, but at your own risk.\n\n - The bot and admins are not responsible for any consequences.\n\n - If someone mentioned requests removal, their name will be taken down.\n\n"
         "4.  <b>Names & Responsibility:</b> Do not share personal identifying information about yourself or others.\n\n"
-        "5.  <b>Anonymity & Privacy:</b> don’t reveal private details of others (contacts, adress, etc.) without consent.\n\n"
-        "6.  <b>Constructive Environment:</b> Keep confessions genuine. Avoid spam, trolling, or repeated submissions.\n\n - Respect moderators’ decisions on approvals, edits, or removals.\n\n\n"
+        "5.  <b>Anonymity & Privacy:</b> don't reveal private details of others (contacts, adress, etc.) without consent.\n\n"
+        "6.  <b>Constructive Environment:</b> Keep confessions genuine. Avoid spam, trolling, or repeated submissions.\n\n - Respect moderators' decisions on approvals, edits, or removals.\n\n\n"
         "<i>Use this space to connect, share, and learn, not to spread misinformation or cause unnecessary drama.</i>"
     )
     await message.answer(rules_text)
@@ -520,8 +522,8 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
         "2.  <b>Respectful Communication:</b> Sensitive topics (political, religious, cultural, etc.) are allowed but must be discussed with respect.\n\n"
         "3.  <b>No Harmful Content:</b> You may mention names, but at your own risk.\n\n - The bot and admins are not responsible for any consequences.\n\n - If someone mentioned requests removal, their name will be taken down.\n\n"
         "4.  <b>Names & Responsibility:</b> Do not share personal identifying information about yourself or others.\n\n"
-        "5.  <b>Anonymity & Privacy:</b> don’t reveal private details of others (contacts, adress, etc.) without consent.\n\n"
-        "6.  <b>Constructive Environment:</b> Keep confessions genuine. Avoid spam, trolling, or repeated submissions.\n\n - Respect moderators’ decisions on approvals, edits, or removals.\n\n\n"
+        "5.  <b>Anonymity & Privacy:</b> don't reveal private details of others (contacts, adress, etc.) without consent.\n\n"
+        "6.  <b>Constructive Environment:</b> Keep confessions genuine. Avoid spam, trolling, or repeated submissions.\n\n - Respect moderators' decisions on approvals, edits, or removals.\n\n\n"
         "<i>Use this space to connect, share, and learn, not to spread misinformation or cause unnecessary drama.</i>"
         )
         accept_keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -536,16 +538,32 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
             conf_id = int(deep_link_args.split("_", 1)[1])
             logging.info(f"User {message.from_user.id} started via deep link for conf {conf_id}")
             async with db.acquire() as conn:
-                conf_data = await conn.fetchrow("SELECT c.text, c.categories, c.status, c.user_id, COUNT(com.id) as comment_count FROM confessions c LEFT JOIN comments com ON c.id = com.confession_id WHERE c.id = $1 GROUP BY c.id", conf_id)
+                conf_data = await conn.fetchrow("SELECT c.text, c.categories, c.status, c.user_id, c.photo_file_id, COUNT(com.id) as comment_count FROM confessions c LEFT JOIN comments com ON c.id = com.confession_id WHERE c.id = $1 GROUP BY c.id", conf_id)
             if not conf_data or conf_data['status'] != 'approved':
                 await message.answer(f"Confession #{conf_id} not found or not approved."); return
             comm_count = conf_data['comment_count']; categories = conf_data['categories'] or []; category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories]) if categories else "#Unknown"
-            txt = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
-            builder = InlineKeyboardBuilder()
-            builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
-            builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
-            builder.adjust(1, 1)
-            await message.answer(txt, reply_markup=builder.as_markup())
+            
+            # Check if confession has photo
+            if conf_data['photo_file_id']:
+                caption = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
+                builder = InlineKeyboardBuilder()
+                builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
+                builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
+                builder.adjust(1, 1)
+                
+                await bot.send_photo(
+                    chat_id=user_id,
+                    photo=conf_data['photo_file_id'],
+                    caption=caption,
+                    reply_markup=builder.as_markup()
+                )
+            else:
+                txt = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
+                builder = InlineKeyboardBuilder()
+                builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
+                builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
+                builder.adjust(1, 1)
+                await message.answer(txt, reply_markup=builder.as_markup())
         except (ValueError, IndexError): await message.answer("Invalid link.")
         except Exception as e: logging.error(f"Err handling deep link '{deep_link_args}': {e}", exc_info=True); await message.answer("Error processing link.")
     else: await message.answer("Welcome! Use /confess to share anonymously, /profile to see your history, or /help for more info.", reply_markup=ReplyKeyboardRemove())
@@ -570,7 +588,7 @@ async def show_help(message: types.Message):
     help_text = (
         "<b>Welcome to the Confession Bot!</b>\n\n"
         "Here's how to use the bot:\n"
-        "🔹 /confess - Submit a new anonymous confession.\n"
+        "🔹 /confess - Submit a new anonymous confession (text or photo with caption).\n"
         "🔹 /profile - View your medal points, past confessions, and comments.\n"
         "🔹 /start - Show the welcome message.\n"
         "🔹 /help - Display this help message.\n"
@@ -752,14 +770,15 @@ async def handle_profile_menu(callback_query: types.CallbackQuery):
                 total_pages = (total_count + 5 - 1) // 5
                 page = max(1, min(page, total_pages))
                 offset = (page - 1) * 5
-                confessions = await conn.fetch("SELECT id, text, status, created_at FROM confessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5 OFFSET $2", user_id, offset)
+                confessions = await conn.fetch("SELECT id, text, status, created_at, photo_file_id FROM confessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5 OFFSET $2", user_id, offset)
 
             response_text = f"<b>📜 Your Confessions (Page {page}/{total_pages})</b>\n\n"
             builder = InlineKeyboardBuilder()
             for conf in confessions:
                 snippet = html.quote(conf['text'][:60]) + ('...' if len(conf['text']) > 60 else '')
                 status_emoji = {"approved": "✅", "pending": "⏳", "rejected": "❌", "deleted": "🗑️"}.get(conf['status'], "❓")
-                response_text += f"<b>ID:</b> #{conf['id']} ({status_emoji} {conf['status'].capitalize()})\n<i>\"{snippet}\"</i>\n\n"
+                photo_indicator = " 📷" if conf['photo_file_id'] else ""
+                response_text += f"<b>ID:</b> #{conf['id']} ({status_emoji} {conf['status'].capitalize()}{photo_indicator})\n<i>\"{snippet}\"</i>\n\n"
                 if conf['status'] in ['approved', 'pending']:
                     builder.row(InlineKeyboardButton(text=f"Request Deletion for #{conf['id']}", callback_data=f"req_del_conf_{conf['id']}"))
 
@@ -858,7 +877,15 @@ async def confirm_deletion_request(callback_query: types.CallbackQuery):
 @dp.message(Command("confess"), StateFilter(None))
 async def start_confession(message: types.Message, state: FSMContext):
     await state.update_data(selected_categories=[])
-    await message.answer(f"Please choose 1 to {MAX_CATEGORIES} categories. Click 'Done Selecting' when finished.", reply_markup=create_category_keyboard([]))
+    await message.answer(
+        f"📝 <b>Confession Submission</b>\n\n"
+        f"Please choose 1 to {MAX_CATEGORIES} categories. Click 'Done Selecting' when finished.\n\n"
+        f"<i>After selecting categories, you can submit:</i>\n"
+        f"• Text-only confession: Send your text\n"
+        f"• Photo with caption: Send a photo with caption (max {MAX_PHOTO_SIZE_MB}MB)\n\n"
+        f"<i>Categories will help users find your confession.</i>",
+        reply_markup=create_category_keyboard([])
+    )
     await state.set_state(ConfessionForm.selecting_categories)
 
 @dp.callback_query(StateFilter(ConfessionForm.selecting_categories), F.data.startswith("category_"))
@@ -872,7 +899,14 @@ async def handle_category_selection(callback_query: types.CallbackQuery, state: 
         if len(selected_categories) > MAX_CATEGORIES: await callback_query.answer(f"Too many categories (max {MAX_CATEGORIES}).", show_alert=True); return
         await state.set_state(ConfessionForm.waiting_for_text)
         category_tags = " ".join([f"#{html.quote(cat)}" for cat in selected_categories])
-        await callback_query.message.edit_text(f"Categories selected: <b>{category_tags}</b>\n\nNow, send the text of your confession, or /cancel.", reply_markup=None)
+        
+        await callback_query.message.edit_text(
+            f"✅ <b>Categories selected:</b> {category_tags}\n\n"
+            f"📝 <b>Now, send your confession:</b>\n\n"
+            f"• Text only: Send your confession text (min 10 chars, max 3900 chars)\n"
+            f"• Text with photo: Send a photo with caption (photo max {MAX_PHOTO_SIZE_MB}MB)\n\n"
+            f"<i>Type /cancel to abort.</i>"
+        )
         await callback_query.answer(); return
     category = action
     if category in CATEGORIES:
@@ -883,9 +917,36 @@ async def handle_category_selection(callback_query: types.CallbackQuery, state: 
         await callback_query.message.edit_reply_markup(reply_markup=create_category_keyboard(selected_categories))
         await callback_query.answer(f"'{category}' {'selected' if category in selected_categories else 'deselected'}.")
 
+# Handle text-only confession
 @dp.message(ConfessionForm.waiting_for_text, F.text)
-async def receive_confession_text(message: types.Message, state: FSMContext):
-    conf_text = message.text; user_id = message.from_user.id; state_data = await state.get_data(); selected_categories: List[str] = state_data.get("selected_categories", [])
+async def receive_text_confession(message: types.Message, state: FSMContext):
+    if message.text.startswith('/'):
+        return
+    
+    await process_confession(message, state, text=message.text, photo_file_id=None)
+
+# Handle photo with caption confession
+@dp.message(ConfessionForm.waiting_for_text, F.photo)
+async def receive_photo_confession(message: types.Message, state: FSMContext):
+    # Get the best quality photo (last one in array is highest quality)
+    photo_file_id = message.photo[-1].file_id
+    text = message.caption or ""
+    
+    if not text.strip():
+        await message.answer("❌ Please add a caption to your photo. The caption is your confession text.")
+        return
+    
+    # Check file size (optional)
+    file_size_mb = message.photo[-1].file_size / (1024 * 1024) if message.photo[-1].file_size else 0
+    
+    if file_size_mb > MAX_PHOTO_SIZE_MB:
+        await message.answer(f"❌ Photo is too large ({file_size_mb:.1f}MB). Maximum size is {MAX_PHOTO_SIZE_MB}MB.")
+        return
+    
+    await process_confession(message, state, text=text, photo_file_id=photo_file_id)
+
+async def process_confession(message: types.Message, state: FSMContext, text: str, photo_file_id: Optional[str] = None):
+    conf_text = text; user_id = message.from_user.id; state_data = await state.get_data(); selected_categories: List[str] = state_data.get("selected_categories", [])
     if not selected_categories:
         await message.answer("⚠️ Error: Category info lost. Please start again with /confess."); await state.clear(); return
     if len(conf_text) < 10: await message.answer("Confession too short (min 10 chars)."); return
@@ -893,15 +954,59 @@ async def receive_confession_text(message: types.Message, state: FSMContext):
     try:
         async with db.acquire() as conn:
             async with conn.transaction():
-                conf_id = await conn.fetchval("INSERT INTO confessions (text, user_id, categories, status) VALUES ($1, $2, $3, 'pending') RETURNING id", conf_text, user_id, selected_categories)
+                # Handle photo confession insert
+                if photo_file_id:
+                    conf_id = await conn.fetchval(
+                        "INSERT INTO confessions (text, user_id, categories, status, photo_file_id) VALUES ($1, $2, $3, 'pending', $4) RETURNING id", 
+                        conf_text, user_id, selected_categories, photo_file_id
+                    )
+                else:
+                    conf_id = await conn.fetchval(
+                        "INSERT INTO confessions (text, user_id, categories, status) VALUES ($1, $2, $3, 'pending') RETURNING id", 
+                        conf_text, user_id, selected_categories
+                    )
                 if not conf_id: raise Exception("Failed to get confession ID")
                 await update_user_points(conn, user_id, POINTS_PER_CONFESSION)
+        
         category_tags = " ".join([f"#{html.quote(cat)}" for cat in selected_categories])
-        kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Approve", callback_data=f"approve_{conf_id}")], [InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_{conf_id}")]])
-        admin_msg_text = f"<b>New Confession Review</b>\n<b>ID:</b> {conf_id}\n<b>Categories:</b> {category_tags}\n<b>User ID:</b> <code>{user_id}</code>\n\n<b>Text:</b>\n{html.quote(conf_text)}"
-        await bot.send_message(ADMIN_ID, admin_msg_text, reply_markup=kbd)
-        await message.answer("✅ Your confession has been submitted and is pending review.")
-        logging.info(f"Confession #{conf_id} (Categories: {', '.join(selected_categories)}) submitted by User ID {user_id}")
+        
+        # Send to admin based on confession type
+        if photo_file_id:
+            # Photo confession to admin
+            admin_caption = (
+                f"🖼️ <b>New Photo Confession Review</b>\n"
+                f"<b>ID:</b> {conf_id}\n"
+                f"<b>Categories:</b> {category_tags}\n"
+                f"<b>User ID:</b> <code>{user_id}</code>\n\n"
+                f"<b>Caption:</b>\n{html.quote(conf_text)}"
+            )
+            
+            kbd = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Approve", callback_data=f"approve_{conf_id}")],
+                [InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_{conf_id}")]
+            ])
+            
+            await bot.send_photo(
+                chat_id=ADMIN_ID,
+                photo=photo_file_id,
+                caption=admin_caption,
+                reply_markup=kbd
+            )
+            
+            await message.answer(
+                f"✅ <b>Your photo confession has been submitted!</b>\n\n"
+                f"<b>Confession ID:</b> #{conf_id}\n"
+                f"<b>Categories:</b> {category_tags}\n\n"
+                f"<i>An admin will review it shortly. You'll be notified when it's approved.</i>"
+            )
+        else:
+            # Text-only confession (existing code)
+            admin_msg_text = f"<b>New Confession Review</b>\n<b>ID:</b> {conf_id}\n<b>Categories:</b> {category_tags}\n<b>User ID:</b> <code>{user_id}</code>\n\n<b>Text:</b>\n{html.quote(conf_text)}"
+            kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Approve", callback_data=f"approve_{conf_id}")], [InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_{conf_id}")]])
+            await bot.send_message(ADMIN_ID, admin_msg_text, reply_markup=kbd)
+            await message.answer("✅ Your confession has been submitted and is pending review.")
+        
+        logging.info(f"Confession #{conf_id} (Photo: {bool(photo_file_id)}, Categories: {', '.join(selected_categories)}) submitted by User ID {user_id}")
     except Exception as e:
         logging.error(f"Error processing confession from {user_id}: {e}", exc_info=True)
         await message.answer("An internal error occurred.")
@@ -916,7 +1021,7 @@ async def admin_action(callback_query: types.CallbackQuery, state: FSMContext):
     action, conf_id_str = callback_query.data.split("_", 1); conf_id = int(conf_id_str)
     
     async with db.acquire() as conn:
-        conf = await conn.fetchrow("SELECT id, text, user_id, categories, status, (SELECT message_id FROM confessions WHERE id=$1) as original_message_id FROM confessions WHERE id = $1", conf_id)
+        conf = await conn.fetchrow("SELECT id, text, user_id, categories, status, photo_file_id FROM confessions WHERE id = $1", conf_id)
         if not conf: await callback_query.answer("Confession not found.", show_alert=True); return
         if conf['status'] != 'pending': await callback_query.answer(f"Already '{conf['status']}'.", show_alert=True); return
 
@@ -924,9 +1029,25 @@ async def admin_action(callback_query: types.CallbackQuery, state: FSMContext):
             try:
                 link = f"https://t.me/{bot_info.username}?start=view_{conf['id']}"
                 category_tags = " ".join([f"#{html.quote(cat)}" for cat in conf['categories'] or []])
-                channel_post_text = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
-                channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
-                msg = await bot.send_message(CHANNEL_ID, channel_post_text, reply_markup=channel_kbd)
+                
+                # Check if it's a photo confession
+                if conf['photo_file_id']:
+                    # Post photo confession to channel
+                    channel_caption = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
+                    channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
+                    
+                    msg = await bot.send_photo(
+                        chat_id=CHANNEL_ID,
+                        photo=conf['photo_file_id'],
+                        caption=channel_caption,
+                        reply_markup=channel_kbd
+                    )
+                else:
+                    # Post text confession to channel
+                    channel_post_text = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
+                    channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
+                    msg = await bot.send_message(CHANNEL_ID, channel_post_text, reply_markup=channel_kbd)
+                
                 await conn.execute("UPDATE confessions SET status = 'approved', message_id = $1 WHERE id = $2", msg.message_id, conf_id)
                 await safe_send_message(conf['user_id'], f"✅ Your confession (#{conf_id}) has been approved!")
                 await callback_query.message.edit_text(callback_query.message.html_text + "\n\n-- Approved --", reply_markup=None)
@@ -1399,7 +1520,7 @@ async def handle_contact_response(callback_query: types.CallbackQuery):
 # --- Fallback Handler ---
 @dp.message(StateFilter(None), F.text & ~F.text.startswith('/'))
 async def handle_text_without_state(message: types.Message):
-    await message.reply("Hi! 👋 Use /confess to share anonymously, /profile to see your history, or /help for commands.")
+    await message.reply("Hi! 👋 Use /confess to share anonymously (text or photo), /profile to see your history, or /help for commands.")
 
 # --- Main Execution ---
 async def main():
@@ -1415,7 +1536,7 @@ async def main():
 
         commands = [
             types.BotCommand(command="start", description="Start/View confession"),
-            types.BotCommand(command="confess", description="Submit anonymous confession"),
+            types.BotCommand(command="confess", description="Submit anonymous confession (text or photo)"),
             types.BotCommand(command="profile", description="View your profile and history"),
             types.BotCommand(command="help", description="Show help and commands"),
             types.BotCommand(command="rules", description="View the bot's rules"),
