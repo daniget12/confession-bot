@@ -26,13 +26,30 @@ from aiogram.dispatcher.middlewares.base import BaseMiddleware
 
 # --- Constants ---
 CATEGORIES = [
-    "Relationship", "Family", "School", "Friendship",
-    "Religion", "Mental", "Addiction", "Harassment", "Crush", "Health", "Trauma", "Sexual Assault",
+    # Love & Relationships
+    "Crush", "Love", "Relationship", "Breakup", "Dating",
+    
+    # Personal Issues
+    "Mental Health", "Trauma", "Addiction", "Health",
+    
+    # Social Life
+    "Family", "Friendship", "School",
+    
+    # Serious Matters
+    "Harassment", "Sexual",
+    
+    # Other Topics
+    "Religion", "Mental", "Funny Story",
+    
+    # Help & Support
+    "Question", "Advice Needed",
+    
+    # Catch-all
     "Other"
 ]
 POINTS_PER_CONFESSION = 1
-POINTS_PER_LIKE_RECEIVED = 3
-POINTS_PER_DISLIKE_RECEIVED = -3
+POINTS_PER_LIKE_RECEIVED = 1
+POINTS_PER_DISLIKE_RECEIVED = -1
 MAX_CATEGORIES = 3 # Maximum categories allowed per confession
 MAX_PHOTO_SIZE_MB = 5  # Maximum photo size in MB
 
@@ -1713,5 +1730,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("Bot stopped by user.")
+
 
 
