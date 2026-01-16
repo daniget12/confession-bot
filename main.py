@@ -39,7 +39,7 @@ CATEGORIES = [
     "Harassment", "Sexual",
     
     # Other Topics
-    "Religion", "Mental", "Funny Story", "joke", "meme",
+    "Religion", "Mental", "Funny Story", "Joke", "Meme",
     
     # Help & Support
     "Question", "Advice Needed",
@@ -1730,6 +1730,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("Bot stopped by user.")
+
 
 
 
