@@ -2,6 +2,7 @@ import logging
 import asyncpg
 import os
 import asyncio
+from aiohttp import web 
 from aiogram import Bot, Dispatcher, types, F, html
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject, StateFilter
@@ -15,12 +16,13 @@ from aiogram.types import (
     KeyboardButton, ReplyKeyboardRemove, ForceReply, InputMediaPhoto
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application 
 from datetime import datetime, timedelta
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from typing import Optional, Tuple, Dict, Any, List
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 
-from aiohttp import web
+
 
 # --- Constants ---
 CATEGORIES = [
@@ -1615,6 +1617,7 @@ async def handle_text_without_state(message: types.Message):
     await message.reply("Hi! 👋 Use /confess to share anonymously (text or photo), /profile to see your history, or /help for commands.")
 
 # --- Main Execution ---
+# --- Main Execution ---
 async def main():
     try:
         await setup()
@@ -1622,10 +1625,11 @@ async def main():
             logging.critical("FATAL: Database or bot info missing after setup. Cannot start.")
             return
 
-        # --- NEW: Register middleware ---
+        # Register middleware
         dp.message.middleware(BlockUserMiddleware())
         dp.callback_query.middleware(BlockUserMiddleware())
 
+        # Set bot commands
         commands = [
             types.BotCommand(command="start", description="Start/View confession"),
             types.BotCommand(command="confess", description="Submit anonymous confession (text or photo)"),
@@ -1645,18 +1649,59 @@ async def main():
         await bot.set_my_commands(commands)
         await bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(chat_id=ADMIN_ID))
 
-        tasks = [asyncio.create_task(dp.start_polling(bot, skip_updates=True))]
-        if HTTP_PORT_STR:
-            tasks.append(asyncio.create_task(start_dummy_server()))
-        
-        logging.info("Starting bot...")
-        await asyncio.gather(*tasks)
+        # --- Webhook Configuration ---
+        # Get webhook URL from Render environment
+        webhook_host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "")
+        if webhook_host:
+            # Use webhook mode on Render
+            WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+            webhook_url = f"https://{webhook_host}{WEBHOOK_PATH}"
+            
+            # Set webhook
+            await bot.set_webhook(
+                webhook_url,
+                drop_pending_updates=True,
+                allowed_updates=dp.resolve_used_update_types()
+            )
+            logging.info(f"Webhook set to: {webhook_url}")
+            
+            # Create aiohttp app
+            app = web.Application()
+            webhook_requests_handler = SimpleRequestHandler(
+                dispatcher=dp,
+                bot=bot,
+            )
+            webhook_requests_handler.register(app, path=WEBHOOK_PATH)
+            
+            # Keep health check endpoint
+            app.router.add_get('/', handle_health_check)
+            app.router.add_get('/healthz', handle_health_check)
+            
+            # Setup application
+            setup_application(app, dp, bot=bot)
+            
+            # Get port from environment
+            port = int(HTTP_PORT_STR) if HTTP_PORT_STR else 10000
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, '0.0.0.0', port)
+            await site.start()
+            logging.info(f"Bot started with webhook on port {port}")
+            
+            # Keep running
+            while True:
+                await asyncio.sleep(3600)
+        else:
+            # Fallback to polling (for local development)
+            logging.info("Starting with polling...")
+            await dp.start_polling(bot, skip_updates=True)
 
     except Exception as e:
         logging.critical(f"Fatal error during main execution: {e}", exc_info=True)
     finally:
         logging.info("Shutting down...")
-        # *** FIX: Correctly close the bot session on shutdown ***
+        if 'webhook_host' in locals() and webhook_host:
+            await bot.delete_webhook(drop_pending_updates=True)
         if bot and bot.session:
             await bot.session.close()
         if db:
@@ -1668,4 +1713,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("Bot stopped by user.")
+
 
