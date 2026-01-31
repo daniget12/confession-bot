@@ -2,6 +2,10 @@ import logging
 import asyncpg
 import os
 import asyncio
+import re
+import time
+
+import hashlib
 from aiohttp import web 
 from aiogram import Bot, Dispatcher, types, F, html
 from aiogram.enums import ParseMode
@@ -21,6 +25,7 @@ from datetime import datetime, timedelta
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from typing import Optional, Tuple, Dict, Any, List
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
+from collections import defaultdict
 
 
 
@@ -104,6 +109,9 @@ class ContactAdminForm(StatesGroup):
 class AdminActions(StatesGroup):
     waiting_for_rejection_reason = State()
 
+class UserProfileForm(StatesGroup):
+    waiting_for_profile_name = State()
+
 # --- Database ---
 db = None
 async def create_db_pool():
@@ -152,13 +160,33 @@ async def setup():
         """)
         logging.info("Ensured photo_file_id column exists.")
         
-        # ... rest of your existing setup code ...
-
+        # --- Comments Table ---
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS comments (
+                id SERIAL PRIMARY KEY,
+                confession_id INTEGER NOT NULL REFERENCES confessions(id) ON DELETE CASCADE,
+                user_id BIGINT NOT NULL,
+                text TEXT NULL,
+                sticker_file_id TEXT NULL,
+                animation_file_id TEXT NULL,
+                parent_comment_id INTEGER NULL REFERENCES comments(id) ON DELETE CASCADE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_comments_confession_id ON comments(confession_id);
+            CREATE INDEX IF NOT EXISTS idx_comments_user_id ON comments(user_id);
+        """)
+        logging.info("Checked/Created 'comments' table.")
+        
         # --- Reactions Table ---
         await conn.execute("""
-             CREATE TABLE IF NOT EXISTS reactions ( id SERIAL PRIMARY KEY, comment_id INTEGER REFERENCES comments(id) ON DELETE CASCADE,
-                 user_id BIGINT NOT NULL, reaction_type VARCHAR(10) NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                 UNIQUE(comment_id, user_id) );
+            CREATE TABLE IF NOT EXISTS reactions (
+                id SERIAL PRIMARY KEY,
+                comment_id INTEGER REFERENCES comments(id) ON DELETE CASCADE,
+                user_id BIGINT NOT NULL,
+                reaction_type VARCHAR(10) NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(comment_id, user_id)
+            );
         """)
         logging.info("Checked/Created 'reactions' table.")
 
@@ -218,18 +246,30 @@ async def setup():
         """)
         logging.info("Checked/Created 'deletion_requests' table.")
 
-        # --- NEW: User Status Table (for rules acceptance and blocking) ---
+        # --- User Status Table (for rules acceptance and blocking) ---
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS user_status (
                 user_id BIGINT PRIMARY KEY,
                 has_accepted_rules BOOLEAN NOT NULL DEFAULT FALSE,
                 is_blocked BOOLEAN NOT NULL DEFAULT FALSE,
                 blocked_until TIMESTAMP WITH TIME ZONE NULL,
-                block_reason TEXT NULL
+                block_reason TEXT NULL,
+                profile_name TEXT NULL DEFAULT 'Anonymous'
             );
         """)
         logging.info("Checked/Created 'user_status' table.")
-
+        
+        # Ensure profile_name column exists (for backward compatibility)
+        await conn.execute("""
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='user_status' AND column_name='profile_name') THEN
+                    ALTER TABLE user_status ADD COLUMN profile_name TEXT NULL DEFAULT 'Anonymous';
+                END IF;
+            END $$;
+        """)
+        logging.info("Ensured profile_name column exists.")
 
         logging.info("Database tables setup complete.")
 
@@ -465,6 +505,42 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
     await safe_send_message(user_id, end_txt, reply_markup=nav_keyboard)
 
 
+# --- Profile Helper Functions ---
+
+async def get_profile_name(user_id: int) -> str:
+    """Get user's profile name from user_status table"""
+    async with db.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT COALESCE(profile_name, 'Anonymous') as profile_name 
+            FROM user_status 
+            WHERE user_id = $1
+        """, user_id)
+        return row['profile_name'] if row else 'Anonymous'
+
+async def update_profile_name(user_id: int, profile_name: str):
+    """Update user's profile name in user_status table"""
+    async with db.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_status (user_id, has_accepted_rules, profile_name) 
+            VALUES ($1, TRUE, $2)
+            ON CONFLICT (user_id) DO UPDATE SET 
+            profile_name = EXCLUDED.profile_name
+        """, user_id, profile_name)
+
+def encode_user_id(user_id: int) -> str:
+    """Simple encoding for profile links"""
+    salt = "profile_salt_v1"
+    data = f"{user_id}{salt}".encode()
+    return hashlib.sha256(data).hexdigest()[:12]
+
+async def get_encoded_profile_link(user_id: int) -> str:
+    """Get profile link"""
+    global bot_info
+    if not bot_info:
+        bot_info = await bot.get_me()
+    encoded = encode_user_id(user_id)
+    return f"https://t.me/{bot_info.username}?start=profile_{encoded}"
+
 # --- NEW: Middleware to check for blocked users ---
 class BlockUserMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: types.TelegramObject, data: Dict[str, Any]) -> Any:
@@ -520,6 +596,7 @@ async def show_rules(message: types.Message):
     )
     await message.answer(rules_text)
 
+
 @dp.message(Command("start"))
 async def start(message: types.Message, state: FSMContext, command: Optional[CommandObject] = None):
     await state.clear()
@@ -531,15 +608,15 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
 
     if not has_accepted:
         rules_text = (
-                    "<b>📜 Bot Rules & Regulations</b>\n\n"
-        "<b>To keep the community safe, respectful, and meaningful, please follow these guidelines when using the bot:</b>\n\n"
-        "1.  <b>Stay Relevant:</b> This space is mainly for sharing confessions, experiences, and thoughts.\n\n - Avoid using it just to ask random questions you could easily Google or ask in the right place.\n\n - Some student-related questions may be approved if they benefit the community.\n\n"
-        "2.  <b>Respectful Communication:</b> Sensitive topics (political, religious, cultural, etc.) are allowed but must be discussed with respect.\n\n"
-        "3.  <b>No Harmful Content:</b> You may mention names, but at your own risk.\n\n - The bot and admins are not responsible for any consequences.\n\n - If someone mentioned requests removal, their name will be taken down.\n\n"
-        "4.  <b>Names & Responsibility:</b> Do not share personal identifying information about yourself or others.\n\n"
-        "5.  <b>Anonymity & Privacy:</b> don't reveal private details of others (contacts, adress, etc.) without consent.\n\n"
-        "6.  <b>Constructive Environment:</b> Keep confessions genuine. Avoid spam, trolling, or repeated submissions.\n\n - Respect moderators' decisions on approvals, edits, or removals.\n\n\n"
-        "<i>Use this space to connect, share, and learn, not to spread misinformation or cause unnecessary drama.</i>"
+            "<b>📜 Bot Rules & Regulations</b>\n\n"
+            "<b>To keep the community safe, respectful, and meaningful, please follow these guidelines when using the bot:</b>\n\n"
+            "1.  <b>Stay Relevant:</b> This space is mainly for sharing confessions, experiences, and thoughts.\n\n - Avoid using it just to ask random questions you could easily Google or ask in the right place.\n\n - Some student-related questions may be approved if they benefit the community.\n\n"
+            "2.  <b>Respectful Communication:</b> Sensitive topics (political, religious, cultural, etc.) are allowed but must be discussed with respect.\n\n"
+            "3.  <b>No Harmful Content:</b> You may mention names, but at your own risk.\n\n - The bot and admins are not responsible for any consequences.\n\n - If someone mentioned requests removal, their name will be taken down.\n\n"
+            "4.  <b>Names & Responsibility:</b> Do not share personal identifying information about yourself or others.\n\n"
+            "5.  <b>Anonymity & Privacy:</b> don't reveal private details of others (contacts, adress, etc.) without consent.\n\n"
+            "6.  <b>Constructive Environment:</b> Keep confessions genuine. Avoid spam, trolling, or repeated submissions.\n\n - Respect moderators' decisions on approvals, edits, or removals.\n\n\n"
+            "<i>Use this space to connect, share, and learn, not to spread misinformation or cause unnecessary drama.</i>"
         )
         accept_keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ I Accept the Rules", callback_data="accept_rules")]
@@ -548,55 +625,115 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
         return
 
     deep_link_args = command.args if command else None
-    if deep_link_args and deep_link_args.startswith("view_"):
-        try:
-            conf_id = int(deep_link_args.split("_", 1)[1])
-            logging.info(f"User {message.from_user.id} started via deep link for conf {conf_id}")
-            async with db.acquire() as conn:
-                conf_data = await conn.fetchrow("SELECT c.text, c.categories, c.status, c.user_id, c.photo_file_id, COUNT(com.id) as comment_count FROM confessions c LEFT JOIN comments com ON c.id = com.confession_id WHERE c.id = $1 GROUP BY c.id", conf_id)
-            if not conf_data or conf_data['status'] != 'approved':
-                await message.answer(f"Confession #{conf_id} not found or not approved."); return
-            comm_count = conf_data['comment_count']; categories = conf_data['categories'] or []; category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories]) if categories else "#Unknown"
-            
-            # Check if confession has photo
-            if conf_data['photo_file_id']:
-                caption = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
-                builder = InlineKeyboardBuilder()
-                builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
-                builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
-                builder.adjust(1, 1)
+    if deep_link_args:
+        if deep_link_args.startswith("view_"):
+            try:
+                conf_id = int(deep_link_args.split("_", 1)[1])
+                logging.info(f"User {message.from_user.id} started via deep link for conf {conf_id}")
+                async with db.acquire() as conn:
+                    conf_data = await conn.fetchrow("SELECT c.text, c.categories, c.status, c.user_id, c.photo_file_id, COUNT(com.id) as comment_count FROM confessions c LEFT JOIN comments com ON c.id = com.confession_id WHERE c.id = $1 GROUP BY c.id", conf_id)
+                if not conf_data or conf_data['status'] != 'approved':
+                    await message.answer(f"Confession #{conf_id} not found or not approved."); return
+                comm_count = conf_data['comment_count']; categories = conf_data['categories'] or []; category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories]) if categories else "#Unknown"
                 
-                await bot.send_photo(
-                    chat_id=user_id,
-                    photo=conf_data['photo_file_id'],
-                    caption=caption,
-                    reply_markup=builder.as_markup()
-                )
-            else:
-                txt = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
-                builder = InlineKeyboardBuilder()
-                builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
-                builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
-                builder.adjust(1, 1)
-                await message.answer(txt, reply_markup=builder.as_markup())
-        except (ValueError, IndexError): await message.answer("Invalid link.")
-        except Exception as e: logging.error(f"Err handling deep link '{deep_link_args}': {e}", exc_info=True); await message.answer("Error processing link.")
-    else: await message.answer("Welcome! Use /confess to share anonymously, /profile to see your history, or /help for more info.", reply_markup=ReplyKeyboardRemove())
+                # Check if confession has photo
+                if conf_data['photo_file_id']:
+                    caption = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
+                    builder = InlineKeyboardBuilder()
+                    builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
+                    builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
+                    builder.adjust(1, 1)
+                    
+                    await bot.send_photo(
+                        chat_id=user_id,
+                        photo=conf_data['photo_file_id'],
+                        caption=caption,
+                        reply_markup=builder.as_markup()
+                    )
+                else:
+                    txt = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
+                    builder = InlineKeyboardBuilder()
+                    builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
+                    builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
+                    builder.adjust(1, 1)
+                    await message.answer(txt, reply_markup=builder.as_markup())
+            except (ValueError, IndexError): 
+                await message.answer("Invalid link.")
+            except Exception as e: 
+                logging.error(f"Err handling deep link '{deep_link_args}': {e}", exc_info=True)
+                await message.answer("Error processing link.")
+        
+        # ADD THIS NEW SECTION FOR PROFILE LINKS:
+        elif deep_link_args.startswith("profile_"):
+            try:
+                encoded_user_id = deep_link_args.split("_", 1)[1]
+                
+                # Simple lookup - we'll check users who have interacted
+                async with db.acquire() as conn:
+                    # Try to find user by checking recent interactions
+                    users = await conn.fetch("""
+                        SELECT user_id FROM confessions 
+                        UNION 
+                        SELECT user_id FROM comments 
+                        UNION 
+                        SELECT user_id FROM user_status
+                    """)
+                    
+                    target_user_id = None
+                    for user_row in users:
+                        if encode_user_id(user_row['user_id']) == encoded_user_id:
+                            target_user_id = user_row['user_id']
+                            break
+                
+                if not target_user_id:
+                    await message.answer("Profile not found or link expired.")
+                    return
+                
+                if target_user_id == user_id:
+                    # Show own profile
+                    await user_profile(message)
+                    return
+                
+                # Show other user's profile
+                profile_name = await get_profile_name(target_user_id)
+                points = await get_user_points(target_user_id)
+                
+                profile_text = f"👤 <b>User Profile</b>\n\n"
+                profile_text += f"📛 <b>Display Name:</b> {profile_name}\n"
+                profile_text += f"🏅 <b>Aura Points:</b> {points}\n\n"
+                profile_text += "<i>This user's profile information</i>"
+                
+                await message.answer(profile_text)
+                
+            except Exception as e:
+                logging.error(f"Error handling profile deep link: {e}")
+                await message.answer("Error processing profile link.")
+    
+    else: 
+        await message.answer("Welcome! Use /confess to share anonymously, /profile to see your history, or /help for more info.", reply_markup=ReplyKeyboardRemove())
 
 @dp.callback_query(F.data == "accept_rules")
 async def handle_accept_rules(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     async with db.acquire() as conn:
-        await conn.execute(
-            """INSERT INTO user_status (user_id, has_accepted_rules) VALUES ($1, TRUE)
-               ON CONFLICT (user_id) DO UPDATE SET has_accepted_rules = TRUE""",
-            user_id
-        )
-    await callback_query.message.edit_text("Thank you for accepting the rules! You can now use the bot.\n\n"
-                                          "Use /confess to share anonymously, /profile to see your history, or /help for more info.",
-                                          reply_markup=None)
+        await conn.execute("""
+            INSERT INTO user_status (user_id, has_accepted_rules, profile_name) 
+            VALUES ($1, TRUE, 'Anonymous')
+            ON CONFLICT (user_id) DO UPDATE SET 
+            has_accepted_rules = TRUE,
+            profile_name = COALESCE(user_status.profile_name, 'Anonymous')
+        """, user_id)
+    
+    await callback_query.message.edit_text(
+        "✅ <b>Rules Accepted!</b>\n\n"
+        "Welcome to the confession bot!\n\n"
+        "<b>Your profile has been created!</b>\n"
+        "• Your display name: <b>Anonymous</b>\n"
+        "• You can change it with /profile\n\n"
+        "Use /confess to share anonymously, /profile to customize your profile.",
+        reply_markup=None
+    )
     await callback_query.answer("Rules accepted!")
-
 
 @dp.message(Command("help"), StateFilter(None))
 async def show_help(message: types.Message):
@@ -742,6 +879,7 @@ def create_profile_pagination_keyboard(base_callback: str, current_page: int, to
         row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"{base_callback}_{current_page + 1}"))
     if row:
         builder.row(*row)
+    # Changed from "profile_menu_main_1" to just go back to profile command
     builder.row(InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_menu_main_1"))
     return builder.as_markup()
 
@@ -749,30 +887,48 @@ def create_profile_pagination_keyboard(base_callback: str, current_page: int, to
 async def user_profile(message: types.Message):
     user_id = message.from_user.id
     points = await get_user_points(user_id)
-
-    profile_text = f"👤 <b>Your Profile</b>\n\n🏅 <b>Medal Points (Aura):</b> {points}"
+    profile_name = await get_profile_name(user_id)
+    
+    # Get profile link
+    encoded_link = await get_encoded_profile_link(user_id)
+    
+    profile_text = f"👤 <b>Your Profile</b>\n\n"
+    profile_text += f"🏅 <b>Aura Points:</b> {points}\n"
+    profile_text += f"👁️ <b>Display Name:</b> {profile_name}\n"
+    profile_text += f"🔗 <b>Profile Code:</b> <code>{encoded_link.split('=')[-1]}</code>\n\n"
+    profile_text += "<i>Share your profile code with others</i>\n\n"
+    profile_text += "<b>What would you like to do?</b>"
+    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Change Display Name", callback_data="change_profile_name")],
         [InlineKeyboardButton(text="📜 My Confessions", callback_data="profile_menu_confessions_1")],
         [InlineKeyboardButton(text="💬 My Comments", callback_data="profile_menu_comments_1")]
     ])
+    
     await message.answer(profile_text, reply_markup=keyboard)
-
 @dp.callback_query(F.data.startswith("profile_menu_"))
 async def handle_profile_menu(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     parts = callback_query.data.split("_")
     action = parts[2]
-    # *** FIX: Correctly parse page number from the end of the callback data ***
     page = int(parts[-1])
 
     try:
         if action == "main":
             points = await get_user_points(user_id)
-            profile_text = f"👤 <b>Your Profile</b>\n\n🏅 <b>Medal Points (Aura):</b> {points}"
+            profile_name = await get_profile_name(user_id)
+            
+            profile_text = f"👤 <b>Your Profile</b>\n\n"
+            profile_text += f"🏅 <b>Aura Points:</b> {points}\n"
+            profile_text += f"👁️ <b>Display Name:</b> {profile_name}\n\n"
+            profile_text += "<b>What would you like to view?</b>"
+            
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✏️ Change Display Name", callback_data="change_profile_name")],
                 [InlineKeyboardButton(text="📜 My Confessions", callback_data="profile_menu_confessions_1")],
                 [InlineKeyboardButton(text="💬 My Comments", callback_data="profile_menu_comments_1")]
             ])
+            
             await callback_query.message.edit_text(profile_text, reply_markup=keyboard)
 
         elif action == "confessions":
@@ -815,10 +971,14 @@ async def handle_profile_menu(callback_query: types.CallbackQuery):
 
             response_text = f"<b>💬 Your Comments (Page {page}/{total_pages})</b>\n\n"
             for comm in comments:
-                if comm['text']: snippet = "💬 " + html.quote(comm['text'][:60]) + ('...' if len(comm['text']) > 60 else '')
-                elif comm['sticker_file_id']: snippet = "[Sticker]"
-                elif comm['animation_file_id']: snippet = "[GIF]"
-                else: snippet = "[Unknown Content]"
+                if comm['text']: 
+                    snippet = "💬 " + html.quote(comm['text'][:60]) + ('...' if len(comm['text']) > 60 else '')
+                elif comm['sticker_file_id']: 
+                    snippet = "[Sticker]"
+                elif comm['animation_file_id']: 
+                    snippet = "[GIF]"
+                else: 
+                    snippet = "[Unknown Content]"
                 link = f"https://t.me/{bot_info.username}?start=view_{comm['confession_id']}"
                 response_text += f"On Confession <a href='{link}'>#{comm['confession_id']}</a>:\n<i>\"{snippet}\"</i>\n\n"
 
@@ -833,6 +993,35 @@ async def handle_profile_menu(callback_query: types.CallbackQuery):
             raise
     finally:
         await callback_query.answer()
+
+
+@dp.callback_query(F.data == "change_profile_name")
+async def change_profile_name_start(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.set_state(UserProfileForm.waiting_for_profile_name)
+    await callback_query.message.answer("Please enter your new display name (max 32 characters):")
+    await callback_query.answer()
+
+@dp.message(UserProfileForm.waiting_for_profile_name, F.text)
+async def receive_profile_name(message: types.Message, state: FSMContext):
+    profile_name = message.text.strip()
+    
+    if len(profile_name) > 32:
+        await message.answer("Profile name too long. Maximum 32 characters. Please try again:")
+        return
+    
+    if len(profile_name) < 2:
+        await message.answer("Profile name too short. Minimum 2 characters. Please try again:")
+        return
+    
+    # Basic validation - allow letters, numbers, spaces, underscores
+    if not re.match(r'^[a-zA-Z0-9_ ]+$', profile_name):
+        await message.answer("Profile name can only contain letters, numbers, spaces and underscores. Please try again:")
+        return
+    
+    await update_profile_name(message.from_user.id, profile_name)
+    await message.answer(f"✅ Your display name has been updated to: <b>{html.quote(profile_name)}</b>")
+    await state.clear()
+
 
 
 @dp.callback_query(F.data.startswith("req_del_conf_"))
@@ -1730,6 +1919,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("Bot stopped by user.")
+
 
 
 
