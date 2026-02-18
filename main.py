@@ -771,7 +771,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                 categories = conf_data['categories'] or []
                 category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories]) if categories else "#Unknown"
                 
-                if conf_data['photo_file_id']:
+                                if conf_data['photo_file_id']:
                     caption = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
                     builder = InlineKeyboardBuilder()
                     builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
@@ -784,7 +784,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                     builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
                     builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
                     builder.adjust(1, 1)
-                                await message.answer(txt, reply_markup=builder.as_markup())
+                    await message.answer(txt, reply_markup=builder.as_markup())  # ← FIXED: removed extra spaces
             except (ValueError, IndexError):
                 await message.answer("Invalid link.")
             except Exception as e:
@@ -2729,6 +2729,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
