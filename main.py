@@ -735,6 +735,14 @@ def create_profile_pagination_keyboard(base_callback: str, current_page: int, to
     builder.row(InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_main"))
     return builder.as_markup()
 
+@dp.callback_query()
+async def debug_all_callbacks(callback_query: types.CallbackQuery):
+    """Catch ALL callbacks for debugging"""
+    logger.info(f"🔴 ALL CALLBACKS - Data: '{callback_query.data}'")
+    logger.info(f"🔴 ALL CALLBACKS - From user: {callback_query.from_user.id}")
+    # Don't block, let other handlers process it
+    return
+
 # --- Start Command ---
 @dp.message(Command("start"))
 async def start(message: types.Message, state: FSMContext, command: Optional[CommandObject] = None):
@@ -2829,6 +2837,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
