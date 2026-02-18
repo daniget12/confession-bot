@@ -290,6 +290,7 @@ async def setup():
             # --- Existing Tables (kept exactly as they are) ---
                         # --- Contact Requests Table (FIXED to allow NULL values) ---
                         # --- Contact Requests Table (FIXED to allow NULL values) ---
+                        # --- Contact Requests Table (FIXED to allow NULL values) ---
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS contact_requests (
                     id SERIAL PRIMARY KEY,
@@ -306,16 +307,17 @@ async def setup():
             """)
             logger.info("✅ Contact requests table ready (with NULL support)")
             
-            # Ensure photo_file_id column exists
+            # ADD THIS LINE - Add message column if it doesn't exist
             await conn.execute("""
                 DO $$ 
                 BEGIN
                     IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                                  WHERE table_name='confessions' AND column_name='photo_file_id') THEN
-                        ALTER TABLE confessions ADD COLUMN photo_file_id TEXT NULL;
+                                  WHERE table_name='contact_requests' AND column_name='message') THEN
+                        ALTER TABLE contact_requests ADD COLUMN message TEXT;
                     END IF;
                 END $$;
             """)
+            logger.info("✅ Ensured message column exists in contact_requests")
             
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS comments (
@@ -2782,6 +2784,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
