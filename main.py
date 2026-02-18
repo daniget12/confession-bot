@@ -1599,13 +1599,13 @@ async def view_user_profile(callback_query: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("req_contact_profile_"))
 async def handle_profile_contact_request(callback_query: types.CallbackQuery):
     """Handle contact request from profile view"""
-    logger.info(f"🔴 CONTACT HANDLER - Started with callback: {callback_query.data}")
-    logger.info(f"🔴 CONTACT HANDLER - From user: {callback_query.from_user.id}")
+    logger.info(f"🔴 REQ CONTACT HANDLER - CALLED with: {callback_query.data}")
+    logger.info(f"🔴 REQ CONTACT HANDLER - From user: {callback_query.from_user.id}")
     
     try:
         target_user_id = int(callback_query.data.split("_")[-1])
         requester_id = callback_query.from_user.id
-        logger.info(f"🔴 CONTACT HANDLER - Target: {target_user_id}, Requester: {requester_id}")
+        logger.info(f"🔴 REQ CONTACT HANDLER - Target: {target_user_id}, Requester: {requester_id}")
     except (ValueError, IndexError):
         await callback_query.answer("Invalid request.", show_alert=True)
         return
@@ -1681,6 +1681,7 @@ async def handle_profile_contact_request(callback_query: types.CallbackQuery):
             
     except Exception as e:
         logger.error(f"Error creating contact request: {e}")
+        await callback_query.answer("Error processing request", show_alert=True)
 
 
 @dp.callback_query(F.data.startswith("report_user_"))
@@ -2969,6 +2970,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
