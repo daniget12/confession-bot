@@ -289,6 +289,7 @@ async def setup():
         async with db.acquire() as conn:
             # --- Existing Tables (kept exactly as they are) ---
                         # --- Contact Requests Table (FIXED to allow NULL values) ---
+                        # --- Contact Requests Table (FIXED to allow NULL values) ---
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS contact_requests (
                     id SERIAL PRIMARY KEY,
@@ -342,19 +343,7 @@ async def setup():
                 );
             """)
             
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS contact_requests (
-                    id SERIAL PRIMARY KEY,
-                    confession_id INTEGER NOT NULL REFERENCES confessions(id) ON DELETE CASCADE,
-                    comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
-                    requester_user_id BIGINT NOT NULL,
-                    requested_user_id BIGINT NOT NULL,
-                    status VARCHAR(20) NOT NULL DEFAULT 'pending',
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (comment_id, requester_user_id)
-                );
-            """)
+            
             
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS user_points (
@@ -2793,6 +2782,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
