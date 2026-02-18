@@ -673,12 +673,32 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
                 if c_data['sticker_file_id']:
                     sent_message = await bot.send_sticker(user_id, sticker=c_data['sticker_file_id'], reply_to_message_id=reply_to_msg_id)
                     await bot.send_message(user_id, f"{text_reply_prefix}{display_name}{admin_info}", reply_markup=keyboard)
+                    
+                    # ADD THIS: Send profile button after sticker comment
+                    profile_button = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text=f"👤 View {profile_name}'s Profile", callback_data=f"view_profile_{commenter_uid}")]
+                    ])
+                    await bot.send_message(user_id, "👇 Click to view profile:", reply_markup=profile_button)
+                    
                 elif c_data['animation_file_id']:
                     sent_message = await bot.send_animation(user_id, animation=c_data['animation_file_id'], reply_to_message_id=reply_to_msg_id)
                     await bot.send_message(user_id, f"{text_reply_prefix}{display_name}{admin_info}", reply_markup=keyboard)
+                    
+                    # ADD THIS: Send profile button after GIF comment
+                    profile_button = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text=f"👤 View {profile_name}'s Profile", callback_data=f"view_profile_{commenter_uid}")]
+                    ])
+                    await bot.send_message(user_id, "👇 Click to view profile:", reply_markup=profile_button)
+                    
                 elif c_data['text']:
                     full_text = f"{text_reply_prefix}💬 {html.quote(c_data['text'])}\n\n{display_name}{admin_info}"
                     sent_message = await bot.send_message(user_id, full_text, reply_markup=keyboard, disable_web_page_preview=True, reply_to_message_id=reply_to_msg_id)
+                    
+                    # ADD THIS: Send profile button after text comment
+                    profile_button = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text=f"👤 View {profile_name}'s Profile", callback_data=f"view_profile_{commenter_uid}")]
+                    ])
+                    await bot.send_message(user_id, "👇 Click to view profile:", reply_markup=profile_button)
                 
                 if sent_message:
                     db_id_to_message_id[db_id] = sent_message.message_id
@@ -2437,3 +2457,4 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
