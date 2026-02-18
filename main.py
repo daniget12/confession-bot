@@ -2018,13 +2018,13 @@ async def handle_contact_response(callback_query: types.CallbackQuery):
                     author_uid,
                     f"✅ <b>Contact Request Approved!</b>\n\n"
                     f"<b>{responder_name}</b> has approved your contact request!\n\n"
-                    f"You can now chat with them."
+                    f"You can now chat with them.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="💬 Go to Chat", callback_data=f"view_chat_{chat_id}")]
+                    ])
                 )
                 
-                # Start chat for responder (the one who approved)
-                await state = FSMContext(...) # You'll need to handle state properly
-                
-                # Send chat invitation to responder
+                # Send chat invitation to responder (the one who approved)
                 chat_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="💬 Go to Chat", callback_data=f"view_chat_{chat_id}")]
                 ])
@@ -2929,6 +2929,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
