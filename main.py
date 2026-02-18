@@ -529,10 +529,7 @@ async def build_comment_keyboard(comment_id: int, commenter_user_id: int, viewer
     likes, dislikes = await get_comment_reactions(comment_id)
     builder = InlineKeyboardBuilder()
     
-    # REMOVE THIS LINE - no profile button
-    # builder.button(text="👤 Profile", callback_data=f"view_profile_{commenter_user_id}")
-    
-    # Add reaction buttons
+    # Only reactions and reply - NO profile, NO report, NO contact request
     if commenter_user_id != viewer_user_id:
         builder.button(text=f"👍 {likes}", callback_data=f"react_like_{comment_id}")
         builder.button(text=f"👎 {dislikes}", callback_data=f"react_dislike_{comment_id}")
@@ -540,16 +537,11 @@ async def build_comment_keyboard(comment_id: int, commenter_user_id: int, viewer
         builder.button(text=f"👍 {likes}", callback_data="noop")
         builder.button(text=f"👎 {dislikes}", callback_data="noop")
     
-    # Add other buttons
     builder.button(text="↪️ Reply", callback_data=f"reply_{comment_id}")
-    builder.button(text="⚠️", callback_data=f"report_confirm_{comment_id}")
     
-    # Add contact request button for confession author
-    if viewer_user_id == confession_owner_id and viewer_user_id != commenter_user_id:
-        builder.button(text="🤝 Request Contact", callback_data=f"req_contact_{comment_id}")
-        builder.adjust(4, 1)  # 4 buttons in first row, 1 in second
-    else:
-        builder.adjust(4)  # All 4 buttons in one row
+    # REMOVED: Report button and Contact Request button
+    # Now just 3 buttons in one row
+    builder.adjust(3)
     
     return builder.as_markup()
 
@@ -1439,6 +1431,234 @@ async def show_pending_contact_requests(callback_query: types.CallbackQuery):
     
     await callback_query.message.edit_text(response_text, reply_markup=keyboard.as_markup())
     await callback_query.answer()
+
+@dp.callback_query(F.data.startswith("view_profile_"))
+async def view_user_profile(callback_query: types.CallbackQuery):
+    """Show user profile when name is clicked"""
+    try:
+        # Format: view_profile_123456789
+        target_user_id = int(callback_query.data.split("_")[-1])
+        viewer_id = callback_query.from_user.id
+    except (ValueError, IndexError):
+        await callback_query.answer("Invalid profile link.", show_alert=True)
+        return
+    
+    if target_user_id == viewer_id:
+        await user_profile(callback_query.message)
+        await callback_query.answer()
+        return
+    
+    # Get user info
+    profile_name = await get_profile_name(target_user_id)
+    points = await get_user_points(target_user_id)
+    
+    # Check if already have active chat
+    existing_chat = await fetch_one("""
+        SELECT id FROM active_chats 
+        WHERE ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1)) 
+        AND is_active = 1
+    """, viewer_id, target_user_id)
+    
+    # Check if pending request exists
+    pending_req = await fetch_one("""
+        SELECT id FROM contact_requests 
+        WHERE requester_user_id = $1 AND requested_user_id = $2 AND status = 'pending'
+    """, viewer_id, target_user_id)
+    
+    # Check if approved request exists
+    approved_req = await fetch_one("""
+        SELECT id FROM contact_requests 
+        WHERE ((requester_user_id = $1 AND requested_user_id = $2) 
+        OR (requester_user_id = $2 AND requested_user_id = $1))
+        AND status = 'approved'
+    """, viewer_id, target_user_id)
+    
+    profile_text = f"👤 <b>User Profile</b>\n\n"
+    profile_text += f"📛 <b>Display Name:</b> {profile_name}\n"
+    profile_text += f"🏅 <b>Aura Points:</b> {points}\n\n"
+    
+    keyboard = InlineKeyboardBuilder()
+    
+    if existing_chat:
+        profile_text += "<i>You have an active chat with this user.</i>"
+        keyboard.button(text="💬 Go to Chat", callback_data=f"view_chat_{existing_chat['id']}")
+    elif pending_req:
+        profile_text += "<i>You have a pending contact request with this user.</i>"
+        keyboard.button(text="⏳ Request Pending", callback_data="noop")
+    elif approved_req:
+        profile_text += "<i>Contact approved! Start chatting.</i>"
+        keyboard.button(text="💬 Start Chat", callback_data=f"start_chat_{target_user_id}")
+    else:
+        profile_text += "<i>You can request to chat with this user.</i>"
+        # Contact request button
+        keyboard.button(text="🤝 Request Contact", callback_data=f"req_contact_profile_{target_user_id}")
+    
+    # Report user button (for all viewers except self)
+    if viewer_id != target_user_id:
+        keyboard.button(text="⚠️ Report User", callback_data=f"report_user_{target_user_id}")
+    
+    keyboard.button(text="⬅️ Back", callback_data="noop")
+    keyboard.adjust(1)
+    
+    await callback_query.message.edit_text(profile_text, reply_markup=keyboard.as_markup())
+    await callback_query.answer()
+
+@dp.callback_query(F.data.startswith("req_contact_profile_"))
+async def handle_profile_contact_request(callback_query: types.CallbackQuery):
+    """Handle contact request from profile view"""
+    try:
+        target_user_id = int(callback_query.data.split("_")[-1])
+        requester_id = callback_query.from_user.id
+    except (ValueError, IndexError):
+        await callback_query.answer("Invalid request.", show_alert=True)
+        return
+    
+    if target_user_id == requester_id:
+        await callback_query.answer("You cannot request contact with yourself.", show_alert=True)
+        return
+    
+    # Check if already have active chat
+    existing_chat = await fetch_one("""
+        SELECT id FROM active_chats 
+        WHERE ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1)) 
+        AND is_active = 1
+    """, requester_id, target_user_id)
+    
+    if existing_chat:
+        await callback_query.answer("You already have an active chat with this user.", show_alert=True)
+        return
+    
+    # Check if request already exists
+    existing_req = await fetch_one("""
+        SELECT id FROM contact_requests 
+        WHERE requester_user_id = $1 AND requested_user_id = $2 AND status = 'pending'
+    """, requester_id, target_user_id)
+    
+    if existing_req:
+        await callback_query.answer("You already have a pending request with this user.", show_alert=True)
+        return
+    
+    # Create contact request (with confession_id=0, comment_id=0 since it's from profile)
+    req_id = await execute_insert_return_id("""
+        INSERT INTO contact_requests 
+        (confession_id, comment_id, requester_user_id, requested_user_id, status) 
+        VALUES (0, 0, $1, $2, 'pending')
+        RETURNING id
+    """, requester_id, target_user_id)
+    
+    if not req_id:
+        await callback_query.answer("Error creating request.", show_alert=True)
+        return
+    
+    # Get requester's profile name
+    requester_name = await get_profile_name(requester_id)
+    
+    # Notify target user
+    notification = (
+        f"🤝 <b>New Contact Request</b>\n\n"
+        f"<b>From:</b> {requester_name}\n"
+        f"<b>User wants to connect with you!</b>\n\n"
+        f"Do you want to share your username with them?"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Approve", callback_data=f"approve_contact_{req_id}"),
+         InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_contact_{req_id}")]
+    ])
+    
+    sent = await safe_send_message(target_user_id, notification, reply_markup=keyboard)
+    
+    if sent:
+        await callback_query.answer("✅ Contact request sent!")
+        await callback_query.message.answer("✅ Your contact request has been sent to the user.")
+    else:
+        await execute_update("UPDATE contact_requests SET status = 'failed_to_notify' WHERE id = $1", req_id)
+        await callback_query.answer("❌ Could not notify the user.", show_alert=True)
+
+@dp.callback_query(F.data.startswith("report_user_"))
+async def report_user(callback_query: types.CallbackQuery):
+    """Report a user from their profile"""
+    try:
+        target_user_id = int(callback_query.data.split("_")[-1])
+        reporter_id = callback_query.from_user.id
+    except (ValueError, IndexError):
+        await callback_query.answer("Invalid user ID.", show_alert=True)
+        return
+    
+    if target_user_id == reporter_id:
+        await callback_query.answer("You cannot report yourself.", show_alert=True)
+        return
+    
+    # Get user info
+    profile_name = await get_profile_name(target_user_id)
+    
+    # Send report to admins
+    admin_text = (
+        f"⚠️ <b>User Report</b>\n\n"
+        f"<b>Reported User:</b> {profile_name}\n"
+        f"<b>Reported User ID:</b> <code>{target_user_id}</code>\n"
+        f"<b>Reported By:</b> <code>{reporter_id}</code>\n\n"
+        f"<i>User was reported from their profile.</i>"
+    )
+    
+    for admin_id in ADMIN_IDS:
+        await safe_send_message(admin_id, admin_text)
+    
+    await callback_query.answer("✅ User reported. Admins have been notified.", show_alert=True)
+
+@dp.callback_query(F.data.startswith("start_chat_"))
+async def start_chat_from_profile(callback_query: types.CallbackQuery, state: FSMContext):
+    """Start a chat from profile after approved contact request"""
+    try:
+        target_user_id = int(callback_query.data.split("_")[-1])
+        user_id = callback_query.from_user.id
+    except (ValueError, IndexError):
+        await callback_query.answer("Invalid user ID.", show_alert=True)
+        return
+    
+    # Check if chat already exists
+    existing_chat = await fetch_one("""
+        SELECT id FROM active_chats 
+        WHERE ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1)) 
+        AND is_active = 1
+    """, user_id, target_user_id)
+    
+    if existing_chat:
+        # Go to existing chat
+        callback_query.data = f"view_chat_{existing_chat['id']}"
+        await view_chat_messages(callback_query, state)
+        return
+    
+    # Create new chat
+    chat_id = await execute_insert_return_id("""
+        INSERT INTO active_chats (user1_id, user2_id, started_by)
+        VALUES ($1, $2, $1)
+        RETURNING id
+    """, user_id, target_user_id)
+    
+    if chat_id:
+        target_profile = await get_profile_name(target_user_id)
+        
+        # Notify target user
+        try:
+            await bot.send_message(
+                target_user_id,
+                f"💬 <b>New Chat Started</b>\n\n"
+                f"{await get_profile_name(user_id)} has started a chat with you!",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="💬 Go to Chat", callback_data=f"view_chat_{chat_id}")]
+                ])
+            )
+        except Exception as e:
+            logger.warning(f"Could not notify user {target_user_id} about new chat: {e}")
+        
+        await callback_query.answer("Chat started!")
+        
+        # Redirect to chat view
+        callback_query.data = f"view_chat_{chat_id}"
+        await view_chat_messages(callback_query, state)
+    else:
+        await callback_query.answer("Error starting chat.", show_alert=True)
 
 # --- Confession Submission Flow ---
 @dp.message(Command("confess"), StateFilter(None))
@@ -2462,6 +2682,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
