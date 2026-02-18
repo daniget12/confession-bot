@@ -308,16 +308,32 @@ async def setup():
             logger.info("✅ Contact requests table ready (with NULL support)")
             
             # ADD THIS LINE - Add message column if it doesn't exist
+                        # ADD THIS - Remove NOT NULL constraint from confession_id and comment_id
             await conn.execute("""
                 DO $$ 
                 BEGIN
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                                  WHERE table_name='contact_requests' AND column_name='message') THEN
-                        ALTER TABLE contact_requests ADD COLUMN message TEXT;
+                    -- Check if confession_id has NOT NULL constraint
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name='contact_requests' 
+                        AND column_name='confession_id' 
+                        AND is_nullable = 'NO'
+                    ) THEN
+                        ALTER TABLE contact_requests ALTER COLUMN confession_id DROP NOT NULL;
+                    END IF;
+                    
+                    -- Check if comment_id has NOT NULL constraint
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name='contact_requests' 
+                        AND column_name='comment_id' 
+                        AND is_nullable = 'NO'
+                    ) THEN
+                        ALTER TABLE contact_requests ALTER COLUMN comment_id DROP NOT NULL;
                     END IF;
                 END $$;
             """)
-            logger.info("✅ Ensured message column exists in contact_requests")
+            logger.info("✅ Removed NOT NULL constraints from confession_id and comment_id")
             
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS comments (
@@ -2784,6 +2800,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
