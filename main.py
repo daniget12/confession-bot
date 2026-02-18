@@ -529,8 +529,8 @@ async def build_comment_keyboard(comment_id: int, commenter_user_id: int, viewer
     likes, dislikes = await get_comment_reactions(comment_id)
     builder = InlineKeyboardBuilder()
     
-    # Add Profile button FIRST
-    builder.button(text="👤 Profile", callback_data=f"view_profile_{commenter_user_id}")
+    # REMOVE THIS LINE - no profile button
+    # builder.button(text="👤 Profile", callback_data=f"view_profile_{commenter_user_id}")
     
     # Add reaction buttons
     if commenter_user_id != viewer_user_id:
@@ -547,9 +547,9 @@ async def build_comment_keyboard(comment_id: int, commenter_user_id: int, viewer
     # Add contact request button for confession author
     if viewer_user_id == confession_owner_id and viewer_user_id != commenter_user_id:
         builder.button(text="🤝 Request Contact", callback_data=f"req_contact_{comment_id}")
-        builder.adjust(5, 1)  # 5 buttons in first row, 1 in second
+        builder.adjust(4, 1)  # 4 buttons in first row, 1 in second
     else:
-        builder.adjust(5)  # All 5 buttons in one row
+        builder.adjust(4)  # All 4 buttons in one row
     
     return builder.as_markup()
 
@@ -660,7 +660,8 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
             tag_str = f" ({', '.join(tag_parts)})" if tag_parts else ""
             
             encoded_profile_link = await get_encoded_profile_link(commenter_uid)
-            display_name = f"{profile_name} 🏅{aura_points}{tag_str}"
+            profile_link = f"https://t.me/{bot_info.username}?start=profile_{encode_user_id(commenter_uid)}"
+            display_name = f"<a href='{profile_link}'>{profile_name}</a> 🏅{aura_points}{tag_str}"
             admin_info = f" [UID: <code>{commenter_uid}</code>]" if is_admin_user else ""
 
             reply_to_msg_id = None
@@ -2461,6 +2462,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
