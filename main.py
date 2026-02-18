@@ -1515,9 +1515,10 @@ async def show_pending_contact_requests(callback_query: types.CallbackQuery):
         response_text += f"<i>Message:</i> {html.quote(message[:50])}{'...' if len(message) > 50 else ''}\n"
         response_text += f"<i>Time:</i> {time_str}\n\n"
         
+        # ✅ FIX: Use request ID instead of user ID
         keyboard.row(
-            InlineKeyboardButton(text=f"✅ Approve", callback_data=f"approve_contact_{req['requester_user_id']}"),
-            InlineKeyboardButton(text=f"❌ Reject", callback_data=f"reject_contact_{req['requester_user_id']}")
+            InlineKeyboardButton(text=f"✅ Approve", callback_data=f"approve_contact_{req['id']}"),
+            InlineKeyboardButton(text=f"❌ Reject", callback_data=f"reject_contact_{req['id']}")
         )
     
     keyboard.row(InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_main"))
@@ -2970,6 +2971,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
