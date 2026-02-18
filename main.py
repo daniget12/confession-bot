@@ -2628,42 +2628,84 @@ async def get_user_id_command(message: types.Message):
         await message.answer("This command is for admins only.")
         return
     
+    target_id = None
+    target_name = None
+    target_username = None
+    
+    # Check if replying to a message
     if message.reply_to_message:
         target_id = message.reply_to_message.from_user.id
         target_name = message.reply_to_message.from_user.full_name
         target_username = message.reply_to_message.from_user.username
-        
-        profile_name = await get_profile_name(target_id)
-        points = await get_user_points(target_id)
-        
-        response = f"👤 <b>User Information</b>\n\n<b>ID:</b> <code>{target_id}</code>\n<b>Name:</b> {target_name}\n"
-        if target_username:
-            response += f"<b>Username:</b> @{target_username}\n"
-        response += f"<b>Profile:</b> {profile_name}\n<b>Points:</b> {points}\n"
-        
-        status = await fetch_one("SELECT is_blocked, blocked_until FROM user_status WHERE user_id = $1", target_id)
-        if status and status['is_blocked']:
-            if status['blocked_until']:
-                response += f"<b>Status:</b> Blocked until {status['blocked_until'].strftime('%Y-%m-%d %H:%M')}\n"
-            else:
-                response += f"<b>Status:</b> Permanently blocked\n"
-        else:
-            response += f"<b>Status:</b> Active\n"
-        
-        await message.answer(response)
     else:
+        # Try to get ID from command arguments
         parts = message.text.split()
         if len(parts) > 1:
             try:
                 target_id = int(parts[1])
-                profile_name = await get_profile_name(target_id)
-                points = await get_user_points(target_id)
-                response = f"👤 <b>User Information</b>\n\n<b>ID:</b> <code>{target_id}</code>\n<b>Profile:</b> {profile_name}\n<b>Points:</b> {points}\n"
-                await message.answer(response)
+                # Try to get user info from Telegram
+                try:
+                    chat = await bot.get_chat(target_id)
+                    target_name = chat.full_name
+                    target_username = chat.username
+                except:
+                    target_name = "Unknown"
+                    target_username = None
             except ValueError:
-                await message.answer("Invalid user ID.")
+                await message.answer("Invalid user ID. Please provide a valid numeric ID.")
+                return
         else:
-            await message.answer(f"<b>Your ID:</b> <code>{message.from_user.id}</code>")
+            # No arguments, show admin's own ID
+            target_id = message.from_user.id
+            target_name = message.from_user.full_name
+            target_username = message.from_user.username
+    
+    # Get profile info from database
+    profile_name = await get_profile_name(target_id)
+    points = await get_user_points(target_id)
+    
+    # Generate profile link
+    profile_link = await get_encoded_profile_link(target_id)
+    
+    # Check block status
+    status = await fetch_one("SELECT is_blocked, blocked_until, block_reason FROM user_status WHERE user_id = $1", target_id)
+    
+    response = f"👤 <b>User Information</b>\n\n"
+    response += f"<b>ID:</b> <code>{target_id}</code>\n"
+    response += f"<b>Telegram Name:</b> {html.quote(target_name) if target_name else 'Unknown'}\n"
+    
+    if target_username:
+        response += f"<b>Username:</b> @{target_username}\n"
+    else:
+        response += f"<b>Username:</b> None (private)\n"
+    
+    response += f"<b>Profile Name:</b> {html.quote(profile_name)}\n"
+    response += f"<b>Profile Link:</b> {profile_link}\n"
+    response += f"<b>Aura Points:</b> {points}\n"
+    
+    if status and status['is_blocked']:
+        if status['blocked_until']:
+            response += f"<b>Status:</b> ⛔ Blocked until {status['blocked_until'].strftime('%Y-%m-%d %H:%M UTC')}\n"
+            if status['block_reason']:
+                response += f"<b>Reason:</b> {html.quote(status['block_reason'])}\n"
+        else:
+            response += f"<b>Status:</b> ⛔ Permanently blocked\n"
+            if status['block_reason']:
+                response += f"<b>Reason:</b> {html.quote(status['block_reason'])}\n"
+    else:
+        response += f"<b>Status:</b> ✅ Active\n"
+    
+    # Add quick action buttons for admins
+    keyboard = InlineKeyboardBuilder()
+    if status and status['is_blocked']:
+        keyboard.button(text="✅ Unblock", callback_data=f"admin_unblock_{target_id}")
+    else:
+        keyboard.button(text="⛔ Block", callback_data=f"admin_block_{target_id}")
+    
+    keyboard.button(text="👤 View Profile", url=profile_link)
+    keyboard.adjust(2)
+    
+    await message.answer(response, reply_markup=keyboard.as_markup(), disable_web_page_preview=True)
 
 @dp.message(Command("warn"))
 async def warn_user(message: types.Message):
@@ -2731,10 +2773,58 @@ async def broadcast_command(message: types.Message, state: FSMContext):
         reply_markup=confirm_keyboard
     )
     
+    # Store the message info
     await state.update_data(
-        broadcast_message_id=message.reply_to_message.message_id,
-        broadcast_chat_id=message.reply_to_message.chat.id
+        broadcast_from_chat_id=message.reply_to_message.chat.id,
+        broadcast_message_id=message.reply_to_message.message_id
     )
+
+@dp.callback_query(F.data == "confirm_broadcast")
+async def confirm_broadcast(callback_query: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback_query.from_user.id):
+        await callback_query.answer("Unauthorized.", show_alert=True)
+        return
+    
+    data = await state.get_data()
+    from_chat_id = data.get('broadcast_from_chat_id')
+    msg_id = data.get('broadcast_message_id')
+    
+    if not from_chat_id or not msg_id:
+        await callback_query.answer("Error: Message data not found.", show_alert=True)
+        await state.clear()
+        return
+    
+    # Get all active users
+    users = await execute_query("SELECT user_id FROM user_status WHERE has_accepted_rules = TRUE AND is_blocked = FALSE")
+    total = len(users)
+    successful = 0
+    failed = 0
+    
+    progress = await callback_query.message.answer(f"📤 Broadcasting... 0/{total}")
+    
+    for i, row in enumerate(users):
+        try:
+            await bot.copy_message(
+                chat_id=row['user_id'],
+                from_chat_id=from_chat_id,
+                message_id=msg_id
+            )
+            successful += 1
+        except Exception as e:
+            failed += 1
+            logger.warning(f"Broadcast failed to {row['user_id']}: {e}")
+        
+        if i % 10 == 0:
+            try:
+                await progress.edit_text(f"📤 Broadcasting... {successful + failed}/{total}")
+            except:
+                pass
+        await asyncio.sleep(0.05)  # Small delay to avoid flooding
+    
+    await progress.edit_text(f"✅ Broadcast complete!\nSuccess: {successful}\nFailed: {failed}")
+    await callback_query.message.edit_text(f"✅ Broadcast completed.")
+    await state.clear()
+    await callback_query.answer()
 
 @dp.callback_query(F.data == "confirm_broadcast")
 async def confirm_broadcast(callback_query: types.CallbackQuery, state: FSMContext):
@@ -2929,6 +3019,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
