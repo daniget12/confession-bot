@@ -744,10 +744,11 @@ def create_profile_pagination_keyboard(base_callback: str, current_page: int, to
 
 @dp.callback_query()
 async def debug_all_callbacks(callback_query: types.CallbackQuery):
-    """Catch ALL callbacks for debugging"""
+    """Catch ALL callbacks for debugging - DOES NOT BLOCK other handlers"""
     logger.info(f"🔴 ALL CALLBACKS - Data: '{callback_query.data}'")
     logger.info(f"🔴 ALL CALLBACKS - From user: {callback_query.from_user.id}")
-    # Don't block, let other handlers process it
+    # IMPORTANT: Do NOT call callback_query.answer() here
+    # Just return and let other handlers process it
     return
 
 # --- Start Command ---
@@ -2894,6 +2895,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
