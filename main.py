@@ -2366,48 +2366,42 @@ async def handle_contact_response(callback_query: types.CallbackQuery):
         
         # Parse the callback data
         data_parts = callback_query.data.split("_")
-        logger.info(f"🔍 DEBUG - Split parts: {data_parts}")
         
-        # Check what format we have
-        if len(data_parts) == 3:  # Format: approve_contact_123
-            action = data_parts[0]  # "approve" or "reject" or "deny"
-            req_id = int(data_parts[2])
-            logger.info(f"🔍 DEBUG - Format 3 parts: action={action}, req_id={req_id}")
-        elif len(data_parts) == 4:  # Format: approve_contact_req_123
-            action = data_parts[0]
-            req_id = int(data_parts[3])
-            logger.info(f"🔍 DEBUG - Format 4 parts: action={action}, req_id={req_id}")
+        # The format is: approve_contact_TARGET_USER_ID
+        if len(data_parts) >= 3:
+            action = data_parts[0]  # "approve" or "reject"
+            # The last part is the TARGET user ID (the person who sent the request)
+            target_user_id = int(data_parts[-1])
+            logger.info(f"🔍 DEBUG - Action: {action}, Target User ID: {target_user_id}")
         else:
-            logger.error(f"🔍 DEBUG - Unexpected format with {len(data_parts)} parts")
+            logger.error(f"Unexpected format: {data_parts}")
             await callback_query.answer("Invalid request format.", show_alert=True)
             return
             
         responder_uid = callback_query.from_user.id
         
-    except (ValueError, IndexError) as e:
-        logger.error(f"🔍 DEBUG - Error parsing: {e}")
+        # Find the pending request where this user is the requester AND the target is correct
+        # The person clicking approve is the requested_user_id
+        # The target_user_id from callback is the requester_user_id
+        req_data = await fetch_one("""
+            SELECT * FROM contact_requests 
+            WHERE requester_user_id = $1 
+            AND requested_user_id = $2 
+            AND status = 'pending'
+            ORDER BY id DESC LIMIT 1
+        """, target_user_id, responder_uid)
+        
+        if not req_data:
+            logger.error(f"No pending request found from {target_user_id} to {responder_uid}")
+            await callback_query.answer("No pending request found.", show_alert=True)
+            return
+        
+        req_id = req_data['id']
+        logger.info(f"Found request ID: {req_id}")
+        
+    except Exception as e:
+        logger.error(f"Error parsing callback: {e}")
         await callback_query.answer("Invalid request.", show_alert=True)
-        return
-    
-    # Get request details
-    req_data = await fetch_one("SELECT * FROM contact_requests WHERE id = $1", req_id)
-    
-    if not req_data:
-        logger.error(f"🔍 DEBUG - Request {req_id} not found in database")
-        await callback_query.answer("Request not found.", show_alert=True)
-        return
-    
-    logger.info(f"🔍 DEBUG - Request data: {dict(req_data)}")
-    logger.info(f"🔍 DEBUG - Expected user: {req_data['requested_user_id']}, Actual user: {responder_uid}")
-    
-    # Check if this user is the intended recipient
-    if responder_uid != req_data['requested_user_id']:
-        logger.warning(f"🔍 DEBUG - UNAUTHORIZED: User {responder_uid} tried to respond to request {req_id} meant for {req_data['requested_user_id']}")
-        await callback_query.answer("You are not authorized to respond to this request.", show_alert=True)
-        return
-    
-    if req_data['status'] != 'pending':
-        await callback_query.answer(f"This request has already been {req_data['status']}.", show_alert=True)
         return
     
     author_uid = req_data['requester_user_id']
@@ -2443,7 +2437,6 @@ async def handle_contact_response(callback_query: types.CallbackQuery):
                     callback_query.message.html_text + "\n\n✅ <b>Approved! Your username has been shared.</b>",
                     reply_markup=None
                 )
-                logger.info(f"🔍 DEBUG - Successfully approved request {req_id}")
             else:
                 # No username
                 await execute_update(
@@ -2462,9 +2455,8 @@ async def handle_contact_response(callback_query: types.CallbackQuery):
                     callback_query.message.html_text + "\n\n⚠️ <b>Approved but you have no public username.</b>",
                     reply_markup=None
                 )
-                logger.info(f"🔍 DEBUG - Approved request {req_id} but user has no username")
         except Exception as e:
-            logger.error(f"🔍 DEBUG - Error in approval: {e}")
+            logger.error(f"Error in approval: {e}")
             await callback_query.answer("Error fetching username. Please try again.", show_alert=True)
             return
     else:  # reject or deny
@@ -2483,7 +2475,6 @@ async def handle_contact_response(callback_query: types.CallbackQuery):
             callback_query.message.html_text + "\n\n❌ <b>Rejected.</b>",
             reply_markup=None
         )
-        logger.info(f"🔍 DEBUG - Rejected request {req_id}")
     
     await callback_query.answer()
 
@@ -2837,6 +2828,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
