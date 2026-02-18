@@ -1944,7 +1944,177 @@ async def process_confession(message: types.Message, state: FSMContext, text: st
         await message.answer("❌ An error occurred. Please try again.")
     finally:
         await state.clear()
-
+@dp.callback_query(F.data.startswith(("approve_contact_", "reject_contact_", "deny_contact_")))
+async def handle_contact_response(callback_query: types.CallbackQuery):
+    """Handle approve/reject contact request"""
+    try:
+        # DEBUG: Log the exact callback data
+        logger.info(f"🔍 CONTACT - Callback data: '{callback_query.data}'")
+        logger.info(f"🔍 CONTACT - From user: {callback_query.from_user.id}")
+        
+        # Parse the callback data
+        data_parts = callback_query.data.split("_")
+        
+        if len(data_parts) < 3:
+            logger.error(f"Invalid callback format: {callback_query.data}")
+            await callback_query.answer("Invalid request format.", show_alert=True)
+            return
+        
+        action = data_parts[0]  # "approve" or "reject" or "deny"
+        identifier = data_parts[-1]  # Could be user ID or request ID
+        
+        logger.info(f"🔍 CONTACT - Action: {action}, Identifier: {identifier}")
+        
+        responder_uid = callback_query.from_user.id
+        
+        # Check if this is a request from comment (has request ID) or from profile (has user ID)
+        req_data = None
+        
+        # Try to find the request by the identifier
+        try:
+            # First try as request ID
+            req_id = int(identifier)
+            req_data = await fetch_one("""
+                SELECT * FROM contact_requests 
+                WHERE id = $1 AND status = 'pending'
+            """, req_id)
+            
+            if req_data:
+                logger.info(f"Found request by ID {req_id}: requester={req_data['requester_user_id']}, requested={req_data['requested_user_id']}")
+        except ValueError:
+            # Not a number, try as requester user ID
+            requester_id = int(identifier)
+            req_data = await fetch_one("""
+                SELECT * FROM contact_requests 
+                WHERE requester_user_id = $1 
+                AND requested_user_id = $2 
+                AND status = 'pending'
+                ORDER BY id DESC LIMIT 1
+            """, requester_id, responder_uid)
+            
+            if req_data:
+                logger.info(f"Found request by user ID: requester={requester_id}, requested={responder_uid}")
+        
+        if not req_data:
+            # Try one more approach - search for any pending request where this user is the requested user
+            req_data = await fetch_one("""
+                SELECT * FROM contact_requests 
+                WHERE requested_user_id = $1 
+                AND status = 'pending'
+                ORDER BY id DESC LIMIT 1
+            """, responder_uid)
+            
+            if req_data:
+                logger.info(f"Found latest pending request for user: {req_data}")
+        
+        if not req_data:
+            logger.error(f"No pending request found for user {responder_uid}")
+            
+            # Check if there are any requests at all for this user
+            any_requests = await fetch_one("""
+                SELECT COUNT(*) as count FROM contact_requests 
+                WHERE requested_user_id = $1
+            """, responder_uid)
+            
+            if any_requests and any_requests['count'] > 0:
+                await callback_query.answer(f"You have {any_requests['count']} requests, but none are pending. They may have expired.", show_alert=True)
+            else:
+                await callback_query.answer("No contact request found.", show_alert=True)
+            return
+        
+        req_id = req_data['id']
+        author_uid = req_data['requester_user_id']
+        
+        logger.info(f"Processing request ID: {req_id}, from user: {author_uid}, to user: {req_data['requested_user_id']}")
+        
+        # Verify this user is the intended recipient
+        if responder_uid != req_data['requested_user_id']:
+            logger.warning(f"UNAUTHORIZED: User {responder_uid} tried to respond to request {req_id} meant for {req_data['requested_user_id']}")
+            await callback_query.answer("You are not authorized to respond to this request.", show_alert=True)
+            return
+        
+        if action == "approve":
+            try:
+                # Get the responder's information
+                responder_info = await bot.get_chat(responder_uid)
+                username = responder_info.username
+                
+                if username:
+                    # Update request status
+                    await execute_update(
+                        "UPDATE contact_requests SET status = 'approved', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                        req_id
+                    )
+                    
+                    # Create active chat
+                    chat_id = await execute_insert_return_id("""
+                        INSERT INTO active_chats (user1_id, user2_id, started_by) 
+                        VALUES ($1, $2, $2) RETURNING id
+                    """, author_uid, responder_uid)
+                    
+                    # Notify requester
+                    await safe_send_message(
+                        author_uid,
+                        f"✅ <b>Contact Request Approved!</b>\n\n"
+                        f"The user has approved your contact request!\n"
+                        f"Their username is: @{html.quote(username)}\n\n"
+                        f"You can now chat with them."
+                    )
+                    
+                    # Update the message
+                    await callback_query.message.edit_text(
+                        callback_query.message.html_text + "\n\n✅ <b>Approved! Your username has been shared.</b>",
+                        reply_markup=None
+                    )
+                    
+                    await callback_query.answer("✅ Contact request approved!")
+                    
+                else:
+                    # No username
+                    await execute_update(
+                        "UPDATE contact_requests SET status = 'approved_no_username', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                        req_id
+                    )
+                    
+                    await safe_send_message(
+                        author_uid,
+                        f"⚠️ <b>Contact Request Approved</b>\n\n"
+                        f"The user approved your request but doesn't have a public username.\n"
+                        f"They cannot be contacted directly."
+                    )
+                    
+                    await callback_query.message.edit_text(
+                        callback_query.message.html_text + "\n\n⚠️ <b>Approved but you have no public username.</b>",
+                        reply_markup=None
+                    )
+                    
+                    await callback_query.answer("⚠️ Approved, but you have no username to share.")
+                    
+            except Exception as e:
+                logger.error(f"Error in approval: {e}")
+                await callback_query.answer("Error fetching username. Please try again.", show_alert=True)
+                return
+        else:  # reject or deny
+            await execute_update(
+                "UPDATE contact_requests SET status = 'rejected', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                req_id
+            )
+            
+            await safe_send_message(
+                author_uid,
+                f"❌ <b>Contact Request Rejected</b>\n\nYour contact request has been rejected."
+            )
+            
+            await callback_query.message.edit_text(
+                callback_query.message.html_text + "\n\n❌ <b>Rejected.</b>",
+                reply_markup=None
+            )
+            
+            await callback_query.answer("❌ Request rejected.")
+        
+    except Exception as e:
+        logger.error(f"Error in handle_contact_response: {e}", exc_info=True)
+        await callback_query.answer("Error processing request. Please try again.", show_alert=True)
 # --- Admin Action Handlers ---
 @dp.callback_query(F.data.startswith("approve_"))
 async def handle_approve_confession(callback_query: types.CallbackQuery, state: FSMContext):
@@ -2449,177 +2619,7 @@ async def handle_request_contact(callback_query: types.CallbackQuery):
         await execute_update("UPDATE contact_requests SET status = 'failed_to_notify' WHERE id = $1", req_id)
         await callback_query.answer("⚠️ Could not notify user.", show_alert=True)
 
-@dp.callback_query(F.data.startswith(("approve_contact_", "reject_contact_", "deny_contact_")))
-async def handle_contact_response(callback_query: types.CallbackQuery):
-    """Handle approve/reject contact request"""
-    try:
-        # DEBUG: Log the exact callback data
-        logger.info(f"🔍 CONTACT - Callback data: '{callback_query.data}'")
-        logger.info(f"🔍 CONTACT - From user: {callback_query.from_user.id}")
-        
-        # Parse the callback data
-        data_parts = callback_query.data.split("_")
-        
-        if len(data_parts) < 3:
-            logger.error(f"Invalid callback format: {callback_query.data}")
-            await callback_query.answer("Invalid request format.", show_alert=True)
-            return
-        
-        action = data_parts[0]  # "approve" or "reject" or "deny"
-        identifier = data_parts[-1]  # Could be user ID or request ID
-        
-        logger.info(f"🔍 CONTACT - Action: {action}, Identifier: {identifier}")
-        
-        responder_uid = callback_query.from_user.id
-        
-        # Check if this is a request from comment (has request ID) or from profile (has user ID)
-        req_data = None
-        
-        # Try to find the request by the identifier
-        try:
-            # First try as request ID
-            req_id = int(identifier)
-            req_data = await fetch_one("""
-                SELECT * FROM contact_requests 
-                WHERE id = $1 AND status = 'pending'
-            """, req_id)
-            
-            if req_data:
-                logger.info(f"Found request by ID {req_id}: requester={req_data['requester_user_id']}, requested={req_data['requested_user_id']}")
-        except ValueError:
-            # Not a number, try as requester user ID
-            requester_id = int(identifier)
-            req_data = await fetch_one("""
-                SELECT * FROM contact_requests 
-                WHERE requester_user_id = $1 
-                AND requested_user_id = $2 
-                AND status = 'pending'
-                ORDER BY id DESC LIMIT 1
-            """, requester_id, responder_uid)
-            
-            if req_data:
-                logger.info(f"Found request by user ID: requester={requester_id}, requested={responder_uid}")
-        
-        if not req_data:
-            # Try one more approach - search for any pending request where this user is the requested user
-            req_data = await fetch_one("""
-                SELECT * FROM contact_requests 
-                WHERE requested_user_id = $1 
-                AND status = 'pending'
-                ORDER BY id DESC LIMIT 1
-            """, responder_uid)
-            
-            if req_data:
-                logger.info(f"Found latest pending request for user: {req_data}")
-        
-        if not req_data:
-            logger.error(f"No pending request found for user {responder_uid}")
-            
-            # Check if there are any requests at all for this user
-            any_requests = await fetch_one("""
-                SELECT COUNT(*) as count FROM contact_requests 
-                WHERE requested_user_id = $1
-            """, responder_uid)
-            
-            if any_requests and any_requests['count'] > 0:
-                await callback_query.answer(f"You have {any_requests['count']} requests, but none are pending. They may have expired.", show_alert=True)
-            else:
-                await callback_query.answer("No contact request found.", show_alert=True)
-            return
-        
-        req_id = req_data['id']
-        author_uid = req_data['requester_user_id']
-        
-        logger.info(f"Processing request ID: {req_id}, from user: {author_uid}, to user: {req_data['requested_user_id']}")
-        
-        # Verify this user is the intended recipient
-        if responder_uid != req_data['requested_user_id']:
-            logger.warning(f"UNAUTHORIZED: User {responder_uid} tried to respond to request {req_id} meant for {req_data['requested_user_id']}")
-            await callback_query.answer("You are not authorized to respond to this request.", show_alert=True)
-            return
-        
-        if action == "approve":
-            try:
-                # Get the responder's information
-                responder_info = await bot.get_chat(responder_uid)
-                username = responder_info.username
-                
-                if username:
-                    # Update request status
-                    await execute_update(
-                        "UPDATE contact_requests SET status = 'approved', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-                        req_id
-                    )
-                    
-                    # Create active chat
-                    chat_id = await execute_insert_return_id("""
-                        INSERT INTO active_chats (user1_id, user2_id, started_by) 
-                        VALUES ($1, $2, $2) RETURNING id
-                    """, author_uid, responder_uid)
-                    
-                    # Notify requester
-                    await safe_send_message(
-                        author_uid,
-                        f"✅ <b>Contact Request Approved!</b>\n\n"
-                        f"The user has approved your contact request!\n"
-                        f"Their username is: @{html.quote(username)}\n\n"
-                        f"You can now chat with them."
-                    )
-                    
-                    # Update the message
-                    await callback_query.message.edit_text(
-                        callback_query.message.html_text + "\n\n✅ <b>Approved! Your username has been shared.</b>",
-                        reply_markup=None
-                    )
-                    
-                    await callback_query.answer("✅ Contact request approved!")
-                    
-                else:
-                    # No username
-                    await execute_update(
-                        "UPDATE contact_requests SET status = 'approved_no_username', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-                        req_id
-                    )
-                    
-                    await safe_send_message(
-                        author_uid,
-                        f"⚠️ <b>Contact Request Approved</b>\n\n"
-                        f"The user approved your request but doesn't have a public username.\n"
-                        f"They cannot be contacted directly."
-                    )
-                    
-                    await callback_query.message.edit_text(
-                        callback_query.message.html_text + "\n\n⚠️ <b>Approved but you have no public username.</b>",
-                        reply_markup=None
-                    )
-                    
-                    await callback_query.answer("⚠️ Approved, but you have no username to share.")
-                    
-            except Exception as e:
-                logger.error(f"Error in approval: {e}")
-                await callback_query.answer("Error fetching username. Please try again.", show_alert=True)
-                return
-        else:  # reject or deny
-            await execute_update(
-                "UPDATE contact_requests SET status = 'rejected', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-                req_id
-            )
-            
-            await safe_send_message(
-                author_uid,
-                f"❌ <b>Contact Request Rejected</b>\n\nYour contact request has been rejected."
-            )
-            
-            await callback_query.message.edit_text(
-                callback_query.message.html_text + "\n\n❌ <b>Rejected.</b>",
-                reply_markup=None
-            )
-            
-            await callback_query.answer("❌ Request rejected.")
-        
-    except Exception as e:
-        logger.error(f"Error in handle_contact_response: {e}", exc_info=True)
-        await callback_query.answer("Error processing request. Please try again.", show_alert=True)
+
 
 # --- Admin Commands ---
 @dp.message(Command("admin"))
@@ -2971,6 +2971,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
