@@ -466,17 +466,37 @@ class BlockUserMiddleware(BaseMiddleware):
 
         user_id = user.id
         
-        # Allow /start and /help commands even for blocked users
+        # STEP 1: LOG EVERYTHING (for debugging)
+        if isinstance(event, types.CallbackQuery):
+            logger.info(f"🛡️ MIDDLEWARE - Callback: {event.data} from user {user_id}")
+        
+        # STEP 4: ALLOW CONTACT-RELATED CALLBACKS (the fix)
+        if isinstance(event, types.CallbackQuery):
+            # Always allow these callbacks regardless of block/rules status
+            if event.data.startswith(('accept_rules', 'req_contact_', 'approve_contact_', 'reject_contact_')):
+                logger.info(f"🛡️ MIDDLEWARE - Allowing contact callback: {event.data}")
+                return await handler(event, data)
+        
+        # Allow /start and /help commands
         if isinstance(event, types.Message) and event.text:
             if event.text.startswith('/start') or event.text.startswith('/help'):
                 return await handler(event, data)
         
+        # Check if user is admin
         if await is_admin(user_id):
             return await handler(event, data)
 
+        # Check block status for everything else
         try:
-            row = await fetch_one("SELECT is_blocked, blocked_until, block_reason FROM user_status WHERE user_id = $1", user_id)
+            row = await fetch_one("SELECT is_blocked, blocked_until, block_reason, has_accepted_rules FROM user_status WHERE user_id = $1", user_id)
             
+            # Check if user has accepted rules
+            if not row or not row['has_accepted_rules']:
+                if isinstance(event, types.CallbackQuery):
+                    await event.answer("Please accept the rules first using /start", show_alert=True)
+                return
+            
+            # Check if blocked
             if row and row['is_blocked']:
                 now = datetime.now(datetime.utcnow().astimezone().tzinfo)
                 blocked_until = row['blocked_until']
@@ -486,16 +506,11 @@ class BlockUserMiddleware(BaseMiddleware):
                     return await handler(event, data)
                 else:
                     expiry_info = f"until {blocked_until.strftime('%Y-%m-%d %H:%M %Z')}" if blocked_until else "permanently"
-                    reason_info = f"\nReason: <i>{html.quote(row['block_reason'])}</i>" if row['block_reason'] else ""
-                    
                     if isinstance(event, types.CallbackQuery):
                         await event.answer(f"You are blocked {expiry_info}.", show_alert=True)
-                    elif isinstance(event, types.Message):
-                        with suppress(Exception):
-                            await event.answer(f"❌ <b>You are blocked from using this bot {expiry_info}.</b>{reason_info}")
                     return
         except Exception as e:
-            logger.error(f"Error checking block status for user {user_id}: {e}")
+            logger.error(f"Error checking status for user {user_id}: {e}")
         
         return await handler(event, data)
 
@@ -2937,6 +2952,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
