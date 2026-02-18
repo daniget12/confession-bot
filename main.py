@@ -2763,13 +2763,34 @@ async def broadcast_command(message: types.Message, state: FSMContext):
         await message.answer("Please reply to a message to broadcast it.")
         return
     
+    # Show a preview of what will be broadcast
+    preview_text = "📢 <b>Broadcast Preview</b>\n\n"
+    preview_text += "The following message will be sent to all users:\n\n"
+    
+    if message.reply_to_message.photo:
+        preview_text += "📷 <i>[Photo" + (" with caption" if message.reply_to_message.caption else "") + "]</i>"
+    elif message.reply_to_message.video:
+        preview_text += "🎥 <i>[Video" + (" with caption" if message.reply_to_message.caption else "") + "]</i>"
+    elif message.reply_to_message.document:
+        preview_text += "📄 <i>[Document" + (" with caption" if message.reply_to_message.caption else "") + "]</i>"
+    elif message.reply_to_message.sticker:
+        preview_text += "🎭 <i>[Sticker]</i>"
+    elif message.reply_to_message.animation:
+        preview_text += "🎬 <i>[GIF/Animation" + (" with caption" if message.reply_to_message.caption else "") + "]</i>"
+    elif message.reply_to_message.text:
+        preview_text += f"💬 <i>\"{message.reply_to_message.text[:100]}\"</i>"
+        if len(message.reply_to_message.text) > 100:
+            preview_text += "..."
+    else:
+        preview_text += "❓ <i>[Unsupported message type]</i>"
+    
     confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Yes, Broadcast", callback_data="confirm_broadcast"),
          InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_broadcast")]
     ])
     
     await message.answer(
-        "⚠️ <b>Confirm Broadcast</b>\n\nAre you sure you want to broadcast this message to all users?",
+        preview_text + "\n\n⚠️ <b>Confirm Broadcast</b>\n\nAre you sure you want to broadcast this message to all users?",
         reply_markup=confirm_keyboard
     )
     
@@ -2778,6 +2799,54 @@ async def broadcast_command(message: types.Message, state: FSMContext):
         broadcast_from_chat_id=message.reply_to_message.chat.id,
         broadcast_message_id=message.reply_to_message.message_id
     )
+
+@dp.callback_query(F.data == "confirm_broadcast")
+async def confirm_broadcast(callback_query: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback_query.from_user.id):
+        await callback_query.answer("Unauthorized.", show_alert=True)
+        return
+    
+    data = await state.get_data()
+    from_chat_id = data.get('broadcast_from_chat_id')
+    msg_id = data.get('broadcast_message_id')
+    
+    if not from_chat_id or not msg_id:
+        await callback_query.answer("Error: Message data not found.", show_alert=True)
+        await state.clear()
+        return
+    
+    # Get all active users
+    users = await execute_query("SELECT user_id FROM user_status WHERE has_accepted_rules = TRUE AND is_blocked = FALSE")
+    total = len(users)
+    successful = 0
+    failed = 0
+    
+    progress = await callback_query.message.answer(f"📤 Broadcasting... 0/{total}")
+    
+    for i, row in enumerate(users):
+        try:
+            # copy_message works for ALL message types (photos, videos, documents, stickers, etc.)
+            await bot.copy_message(
+                chat_id=row['user_id'],
+                from_chat_id=from_chat_id,
+                message_id=msg_id
+            )
+            successful += 1
+        except Exception as e:
+            failed += 1
+            logger.warning(f"Broadcast failed to {row['user_id']}: {e}")
+        
+        if i % 10 == 0:
+            try:
+                await progress.edit_text(f"📤 Broadcasting... {successful + failed}/{total}")
+            except:
+                pass
+        await asyncio.sleep(0.05)  # Small delay to avoid flooding
+    
+    await progress.edit_text(f"✅ Broadcast complete!\nSuccess: {successful}\nFailed: {failed}")
+    await callback_query.message.edit_text(f"✅ Broadcast completed.")
+    await state.clear()
+    await callback_query.answer()
 
 @dp.callback_query(F.data == "confirm_broadcast")
 async def confirm_broadcast(callback_query: types.CallbackQuery, state: FSMContext):
@@ -3019,6 +3088,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
