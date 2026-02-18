@@ -2348,7 +2348,7 @@ async def handle_request_contact(callback_query: types.CallbackQuery):
         await execute_update("UPDATE contact_requests SET status = 'failed_to_notify' WHERE id = $1", req_id)
         await callback_query.answer("⚠️ Could not notify user.", show_alert=True)
 
-@dp.callback_query(F.data.startswith(("approve_contact_", "reject_contact_", "deny_contact_")))
+@dp.callback_query(F.data.startswith(("approve_", "reject_", "deny_")))
 async def handle_contact_response(callback_query: types.CallbackQuery):
     """Handle approve/reject contact request"""
     try:
@@ -2829,6 +2829,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
