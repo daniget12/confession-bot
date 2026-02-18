@@ -474,43 +474,56 @@ class BlockUserMiddleware(BaseMiddleware):
         if isinstance(event, types.CallbackQuery):
             # Always allow these callbacks regardless of block/rules status
             if event.data.startswith(('accept_rules', 'req_contact_', 'approve_contact_', 'reject_contact_')):
-                logger.info(f"🛡️ MIDDLEWARE - Allowing contact callback: {event.data}")
+                logger.info(f"🛡️ MIDDLEWARE - ✅ ALLOWING contact callback: {event.data}")
+                logger.info(f"🛡️ MIDDLEWARE - Bypassing all checks for user {user_id}")
                 return await handler(event, data)
+            else:
+                logger.info(f"🛡️ MIDDLEWARE - ❌ NOT a contact callback: {event.data}")
         
         # Allow /start and /help commands
         if isinstance(event, types.Message) and event.text:
             if event.text.startswith('/start') or event.text.startswith('/help'):
+                logger.info(f"🛡️ MIDDLEWARE - Allowing start/help command from user {user_id}")
                 return await handler(event, data)
         
         # Check if user is admin
         if await is_admin(user_id):
+            logger.info(f"🛡️ MIDDLEWARE - User {user_id} is admin, allowing")
             return await handler(event, data)
 
         # Check block status for everything else
         try:
+            logger.info(f"🛡️ MIDDLEWARE - Checking status for user {user_id}")
             row = await fetch_one("SELECT is_blocked, blocked_until, block_reason, has_accepted_rules FROM user_status WHERE user_id = $1", user_id)
+            logger.info(f"🛡️ MIDDLEWARE - User status: {row}")
             
             # Check if user has accepted rules
             if not row or not row['has_accepted_rules']:
+                logger.warning(f"🛡️ MIDDLEWARE - User {user_id} hasn't accepted rules")
                 if isinstance(event, types.CallbackQuery):
                     await event.answer("Please accept the rules first using /start", show_alert=True)
                 return
             
             # Check if blocked
             if row and row['is_blocked']:
+                logger.warning(f"🛡️ MIDDLEWARE - User {user_id} is blocked")
                 now = datetime.now(datetime.utcnow().astimezone().tzinfo)
                 blocked_until = row['blocked_until']
                 
                 if blocked_until and blocked_until < now:
+                    logger.info(f"🛡️ MIDDLEWARE - Block expired for user {user_id}, unblocking")
                     await execute_update("UPDATE user_status SET is_blocked = FALSE, blocked_until = NULL, block_reason = NULL WHERE user_id = $1", user_id)
                     return await handler(event, data)
                 else:
                     expiry_info = f"until {blocked_until.strftime('%Y-%m-%d %H:%M %Z')}" if blocked_until else "permanently"
                     if isinstance(event, types.CallbackQuery):
+                        logger.info(f"🛡️ MIDDLEWARE - Sending block message to user {user_id}")
                         await event.answer(f"You are blocked {expiry_info}.", show_alert=True)
                     return
+            
+            logger.info(f"🛡️ MIDDLEWARE - User {user_id} passed all checks, allowing")
         except Exception as e:
-            logger.error(f"Error checking status for user {user_id}: {e}")
+            logger.error(f"🛡️ MIDDLEWARE - Error checking status for user {user_id}: {e}")
         
         return await handler(event, data)
 
@@ -1586,9 +1599,13 @@ async def view_user_profile(callback_query: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("req_contact_profile_"))
 async def handle_profile_contact_request(callback_query: types.CallbackQuery):
     """Handle contact request from profile view"""
+    logger.info(f"🔴 CONTACT HANDLER - Started with callback: {callback_query.data}")
+    logger.info(f"🔴 CONTACT HANDLER - From user: {callback_query.from_user.id}")
+    
     try:
         target_user_id = int(callback_query.data.split("_")[-1])
         requester_id = callback_query.from_user.id
+        logger.info(f"🔴 CONTACT HANDLER - Target: {target_user_id}, Requester: {requester_id}")
     except (ValueError, IndexError):
         await callback_query.answer("Invalid request.", show_alert=True)
         return
@@ -1664,7 +1681,7 @@ async def handle_profile_contact_request(callback_query: types.CallbackQuery):
             
     except Exception as e:
         logger.error(f"Error creating contact request: {e}")
-        await callback_query.answer("Error creating request. Please try again.", show_alert=True)
+
 
 @dp.callback_query(F.data.startswith("report_user_"))
 async def report_user(callback_query: types.CallbackQuery):
@@ -2952,6 +2969,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
