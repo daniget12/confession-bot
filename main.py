@@ -771,7 +771,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                 categories = conf_data['categories'] or []
                 category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories]) if categories else "#Unknown"
                 
-                                if conf_data['photo_file_id']:
+                if conf_data['photo_file_id']:
                     caption = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
                     builder = InlineKeyboardBuilder()
                     builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
@@ -2729,6 +2729,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
