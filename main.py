@@ -2899,12 +2899,8 @@ async def main():
         await bot.delete_webhook(drop_pending_updates=True)
         logger.info("✅ Webhook cleared")
         
-        # ADD THIS - Force close any existing getUpdates sessions
-        await bot.close()
-        logger.info("✅ Closed any existing bot sessions")
-        
-        # Recreate bot session
-        await bot.create_session()
+        # DON'T close the bot session here - it causes flood control
+        # Just proceed with setup
         
         await setup()
         
@@ -2941,6 +2937,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
