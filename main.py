@@ -241,20 +241,25 @@ async def check_rate_limit(user_id: int) -> bool:
 
 # --- Database Setup ---
 async def create_db_pool():
-    """Create PostgreSQL connection pool"""
+    """Create PostgreSQL connection pool for Supabase - FIXED for PgBouncer"""
     global db
     try:
         connection_string = DATABASE_URL
+        
+        # Handle different connection string formats
         if connection_string.startswith('postgresql://'):
             connection_string = connection_string.replace('postgresql://', 'postgres://')
         
+        # Add sslmode=require if not present
         if 'sslmode' not in connection_string:
             if '?' in connection_string:
                 connection_string += '&sslmode=require'
             else:
                 connection_string += '?sslmode=require'
         
-        logger.info("Connecting to database...")
+        logger.info("Connecting to database with statement_cache_size=0 (for PgBouncer compatibility)...")
+        
+        # CRITICAL FIX: Set statement_cache_size=0 for PgBouncer compatibility
         db = await asyncpg.create_pool(
             dsn=connection_string,
             min_size=1,
@@ -262,9 +267,10 @@ async def create_db_pool():
             command_timeout=60,
             max_queries=50000,
             max_inactive_connection_lifetime=300,
-            timeout=30
+            timeout=30,
+            statement_cache_size=0  # This fixes the prepared statement error!
         )
-        logger.info("✅ Database connection pool created")
+        logger.info("✅ Database connection pool created (PgBouncer compatible)")
         return db
     except Exception as e:
         logger.error(f"Failed to create database pool: {e}")
@@ -2413,7 +2419,10 @@ async def monitor_database():
 async def main():
     http_runner = None
     try:
+        # Clear any existing webhook first
         await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("✅ Webhook cleared")
+        
         await setup()
         
         dp.message.middleware(BlockUserMiddleware())
@@ -2422,7 +2431,9 @@ async def main():
         await set_bot_commands()
         
         http_runner = await start_http_server()
-        asyncio.create_task(monitor_database())
+        
+        # OPTIONAL: Comment out if causing issues
+        # asyncio.create_task(monitor_database())
         
         logger.info(f"🚀 Bot @{bot_info.username} started")
         await dp.start_polling(bot, skip_updates=True, allowed_updates=dp.resolve_used_update_types())
@@ -2450,5 +2461,6 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
