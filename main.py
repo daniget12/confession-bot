@@ -605,10 +605,13 @@ async def get_comment_sequence_number(confession_id: int, comment_id: int) -> Op
     return row['rn'] if row else None
 
 async def show_comments_for_confession(user_id: int, confession_id: int, message_to_edit: Optional[types.Message] = None, page: int = 1):
+    logger.info(f"📝 SHOW COMMENTS - User: {user_id}, Confession: {confession_id}, Page: {page}")
+    
     conf_data = await fetch_one("SELECT status, user_id FROM confessions WHERE id = $1", confession_id)
     
     if not conf_data or conf_data['status'] != 'approved':
         err_txt = f"Confession #{confession_id} not found or not approved."
+        logger.warning(f"📝 SHOW COMMENTS - {err_txt}")
         if message_to_edit:
             await message_to_edit.edit_text(err_txt, reply_markup=None)
         else:
@@ -618,6 +621,10 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
     confession_owner_id = conf_data['user_id']
     total_row = await fetch_one("SELECT COUNT(*) as count FROM comments WHERE confession_id = $1", confession_id)
     total_count = total_row['count'] if total_row else 0
+    
+    logger.info(f"📝 SHOW COMMENTS - Total comments: {total_count}")
+    
+    # ... rest of the function
     
     if total_count == 0:
         msg_text = "<i>No comments yet. Be the first!</i>"
@@ -2069,9 +2076,62 @@ async def admin_reject_delete(callback_query: types.CallbackQuery):
 # --- Comment Handlers ---
 @dp.callback_query(F.data.startswith("browse_"))
 async def browse_comments(callback_query: types.CallbackQuery):
-    conf_id = int(callback_query.data.split("_")[1])
-    await show_comments_for_confession(callback_query.from_user.id, conf_id)
-    await callback_query.answer()
+    """Browse comments for a confession"""
+    try:
+        # Log the callback for debugging
+        logger.info(f"📝 BROWSE COMMENTS - Callback: '{callback_query.data}'")
+        logger.info(f"📝 BROWSE COMMENTS - User: {callback_query.from_user.id}")
+        
+        # Parse confession ID
+        parts = callback_query.data.split("_")
+        if len(parts) < 2:
+            logger.error(f"Invalid browse callback format: {callback_query.data}")
+            await callback_query.answer("Invalid callback data", show_alert=True)
+            return
+        
+        conf_id = int(parts[1])
+        user_id = callback_query.from_user.id
+        
+        logger.info(f"📝 BROWSE COMMENTS - Confession ID: {conf_id}")
+        
+        # Check if confession exists and is approved
+        conf_data = await fetch_one("SELECT status, user_id FROM confessions WHERE id = $1", conf_id)
+        
+        if not conf_data:
+            logger.error(f"Confession {conf_id} not found")
+            await callback_query.answer("Confession not found", show_alert=True)
+            return
+        
+        if conf_data['status'] != 'approved':
+            logger.warning(f"Confession {conf_id} is not approved (status: {conf_data['status']})")
+            await callback_query.answer("This confession is not approved yet", show_alert=True)
+            return
+        
+        # Check if there are any comments
+        count_row = await fetch_one("SELECT COUNT(*) as count FROM comments WHERE confession_id = $1", conf_id)
+        comment_count = count_row['count'] if count_row else 0
+        
+        logger.info(f"📝 BROWSE COMMENTS - Comment count: {comment_count}")
+        
+        if comment_count == 0:
+            await callback_query.answer("No comments yet", show_alert=True)
+            # Still show the add comment option
+            nav = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="➕ Add Comment", callback_data=f"add_{conf_id}")]
+            ])
+            await safe_send_message(user_id, "No comments yet. Be the first to add one!", reply_markup=nav)
+            return
+        
+        # Show comments
+        await callback_query.answer("Loading comments...")
+        await show_comments_for_confession(user_id, conf_id)
+        
+    except ValueError as e:
+        logger.error(f"Error parsing confession ID: {e}")
+        await callback_query.answer("Invalid confession ID", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error in browse_comments: {e}", exc_info=True)
+        await callback_query.answer("Error loading comments", show_alert=True)
 
 @dp.callback_query(F.data.startswith("add_"))
 async def add_comment_start(callback_query: types.CallbackQuery, state: FSMContext):
@@ -2834,6 +2894,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
