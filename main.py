@@ -784,82 +784,84 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                     builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
                     builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
                     builder.adjust(1, 1)
-                    await message.answer(txt, reply_markup=builder.as_markup())
+                                await message.answer(txt, reply_markup=builder.as_markup())
             except (ValueError, IndexError):
                 await message.answer("Invalid link.")
             except Exception as e:
                 logger.error(f"Error handling deep link '{deep_link_args}': {e}")
                 await message.answer("Error processing link.")
+                
         elif deep_link_args.startswith("profile_"):
-    try:
-        encoded_user_id = deep_link_args.split("_", 1)[1]
-        target_user_id = await get_user_id_from_encoded(encoded_user_id)
-        
-        if not target_user_id:
-            await message.answer("Profile not found or link expired.")
-            return
-        
-        if target_user_id == user_id:
-            await user_profile(message)
-            return
-        
-        # Get user info
-        profile_name = await get_profile_name(target_user_id)
-        points = await get_user_points(target_user_id)
-        
-        # Check if already have active chat
-        existing_chat = await fetch_one("""
-            SELECT id FROM active_chats 
-            WHERE ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1)) 
-            AND is_active = 1
-        """, user_id, target_user_id)
-        
-        # Check if pending request exists
-        pending_req = await fetch_one("""
-            SELECT id FROM contact_requests 
-            WHERE requester_user_id = $1 AND requested_user_id = $2 AND status = 'pending'
-        """, user_id, target_user_id)
-        
-        # Check if approved request exists
-        approved_req = await fetch_one("""
-            SELECT id FROM contact_requests 
-            WHERE ((requester_user_id = $1 AND requested_user_id = $2) 
-            OR (requester_user_id = $2 AND requested_user_id = $1))
-            AND status = 'approved'
-        """, user_id, target_user_id)
-        
-        profile_text = f"👤 <b>User Profile</b>\n\n"
-        profile_text += f"📛 <b>Display Name:</b> {profile_name}\n"
-        profile_text += f"🏅 <b>Aura Points:</b> {points}\n\n"
-        
-        keyboard = InlineKeyboardBuilder()
-        
-        if existing_chat:
-            profile_text += "<i>You have an active chat with this user.</i>"
-            keyboard.button(text="💬 Go to Chat", callback_data=f"view_chat_{existing_chat['id']}")
-        elif pending_req:
-            profile_text += "<i>You have a pending contact request with this user.</i>"
-            keyboard.button(text="⏳ Request Pending", callback_data="noop")
-        elif approved_req:
-            profile_text += "<i>Contact approved! Start chatting.</i>"
-            keyboard.button(text="💬 Start Chat", callback_data=f"start_chat_{target_user_id}")
-        else:
-            profile_text += "<i>You can request to chat with this user.</i>"
-            keyboard.button(text="🤝 Request Contact", callback_data=f"req_contact_profile_{target_user_id}")
-        
-        # Report user button
-        if user_id != target_user_id:
-            keyboard.button(text="⚠️ Report User", callback_data=f"report_user_{target_user_id}")
-        
-        keyboard.button(text="⬅️ Back", callback_data="noop")
-        keyboard.adjust(1)
-        
-        await message.answer(profile_text, reply_markup=keyboard.as_markup())
-        
-    except Exception as e:
-        logger.error(f"Error handling profile deep link: {e}")
-        await message.answer("Error processing profile link.")
-    else:
+            try:
+                encoded_user_id = deep_link_args.split("_", 1)[1]
+                target_user_id = await get_user_id_from_encoded(encoded_user_id)
+                
+                if not target_user_id:
+                    await message.answer("Profile not found or link expired.")
+                    return
+                
+                if target_user_id == user_id:
+                    await user_profile(message)
+                    return
+                
+                # Get user info
+                profile_name = await get_profile_name(target_user_id)
+                points = await get_user_points(target_user_id)
+                
+                # Check if already have active chat
+                existing_chat = await fetch_one("""
+                    SELECT id FROM active_chats 
+                    WHERE ((user1_id = $1 AND user2_id = $2) OR (user1_id = $2 AND user2_id = $1)) 
+                    AND is_active = 1
+                """, user_id, target_user_id)
+                
+                # Check if pending request exists
+                pending_req = await fetch_one("""
+                    SELECT id FROM contact_requests 
+                    WHERE requester_user_id = $1 AND requested_user_id = $2 AND status = 'pending'
+                """, user_id, target_user_id)
+                
+                # Check if approved request exists
+                approved_req = await fetch_one("""
+                    SELECT id FROM contact_requests 
+                    WHERE ((requester_user_id = $1 AND requested_user_id = $2) 
+                    OR (requester_user_id = $2 AND requested_user_id = $1))
+                    AND status = 'approved'
+                """, user_id, target_user_id)
+                
+                profile_text = f"👤 <b>User Profile</b>\n\n"
+                profile_text += f"📛 <b>Display Name:</b> {profile_name}\n"
+                profile_text += f"🏅 <b>Aura Points:</b> {points}\n\n"
+                
+                keyboard = InlineKeyboardBuilder()
+                
+                if existing_chat:
+                    profile_text += "<i>You have an active chat with this user.</i>"
+                    keyboard.button(text="💬 Go to Chat", callback_data=f"view_chat_{existing_chat['id']}")
+                elif pending_req:
+                    profile_text += "<i>You have a pending contact request with this user.</i>"
+                    keyboard.button(text="⏳ Request Pending", callback_data="noop")
+                elif approved_req:
+                    profile_text += "<i>Contact approved! Start chatting.</i>"
+                    keyboard.button(text="💬 Start Chat", callback_data=f"start_chat_{target_user_id}")
+                else:
+                    profile_text += "<i>You can request to chat with this user.</i>"
+                    keyboard.button(text="🤝 Request Contact", callback_data=f"req_contact_profile_{target_user_id}")
+                
+                # Report user button
+                if user_id != target_user_id:
+                    keyboard.button(text="⚠️ Report User", callback_data=f"report_user_{target_user_id}")
+                
+                keyboard.button(text="⬅️ Back", callback_data="noop")
+                keyboard.adjust(1)
+                
+                await message.answer(profile_text, reply_markup=keyboard.as_markup())
+                
+            except Exception as e:
+                logger.error(f"Error handling profile deep link: {e}")
+                await message.answer("Error processing profile link.")
+    
+    else:  # ← This else should be aligned with "if deep_link_args:"
         profile_name = await get_profile_name(user_id)
         points = await get_user_points(user_id)
         
@@ -2727,6 +2729,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
