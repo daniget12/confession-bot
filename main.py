@@ -289,16 +289,16 @@ async def setup():
         async with db.acquire() as conn:
             # --- Existing Tables (kept exactly as they are) ---
             await conn.execute("""
-                CREATE TABLE IF NOT EXISTS confessions (
+                CREATE TABLE IF NOT EXISTS contact_requests (
                     id SERIAL PRIMARY KEY,
-                    text TEXT NOT NULL,
-                    user_id BIGINT NOT NULL,
-                    status VARCHAR(10) DEFAULT 'pending',
-                    message_id BIGINT,
-                    photo_file_id TEXT NULL,
+                    confession_id INTEGER REFERENCES confessions(id) ON DELETE CASCADE,
+                    comment_id INTEGER REFERENCES comments(id) ON DELETE CASCADE,
+                    requester_user_id BIGINT NOT NULL,
+                    requested_user_id BIGINT NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'pending',
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    rejection_reason TEXT NULL,
-                    categories TEXT[] NULL
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (comment_id, requester_user_id)
                 );
             """)
             
@@ -1589,7 +1589,7 @@ async def handle_profile_contact_request(callback_query: types.CallbackQuery):
     req_id = await execute_insert_return_id("""
         INSERT INTO contact_requests 
         (confession_id, comment_id, requester_user_id, requested_user_id, status) 
-        VALUES (0, 0, $1, $2, 'pending')
+        VALUES (NULL, NULL, $1, $2, 'pending')
         RETURNING id
     """, requester_id, target_user_id)
     
@@ -2729,6 +2729,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
