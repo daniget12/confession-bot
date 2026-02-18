@@ -2409,7 +2409,7 @@ async def handle_request_contact(callback_query: types.CallbackQuery):
         await execute_update("UPDATE contact_requests SET status = 'failed_to_notify' WHERE id = $1", req_id)
         await callback_query.answer("⚠️ Could not notify user.", show_alert=True)
 
-@dp.callback_query(F.data.startswith(("approve_", "reject_", "deny_")))
+@dp.callback_query(F.data.startswith(("approve_contact_", "reject_contact_", "deny_contact_")))
 async def handle_contact_response(callback_query: types.CallbackQuery):
     """Handle approve/reject contact request"""
     try:
@@ -2420,47 +2420,62 @@ async def handle_contact_response(callback_query: types.CallbackQuery):
         # Parse the callback data
         data_parts = callback_query.data.split("_")
         
-        # Format should be: approve_contact_REQUESTER_USER_ID
-        if len(data_parts) >= 3:
-            action = data_parts[0]  # "approve" or "reject" or "deny"
-            # The last part is the REQUESTER user ID (who sent the request)
-            requester_user_id = int(data_parts[-1])
-            logger.info(f"🔍 CONTACT - Action: {action}, Requester User ID: {requester_user_id}")
-        else:
-            logger.error(f"Unexpected format: {data_parts}")
-            await callback_query.answer("Invalid request format.", show_alert=True)
-            return
-            
+        # Format could be either:
+        # approve_contact_123456789 (with user ID)
+        # approve_contact_42 (with request ID)
+        action = data_parts[0]  # "approve" or "reject" or "deny"
+        identifier = data_parts[-1]  # Could be user ID or request ID
+        
+        logger.info(f"🔍 CONTACT - Action: {action}, Identifier: {identifier}")
+        
         responder_uid = callback_query.from_user.id
         
-        # Find the pending request
-        req_data = await fetch_one("""
-            SELECT * FROM contact_requests 
-            WHERE requester_user_id = $1 
-            AND requested_user_id = $2 
-            AND status = 'pending'
-            ORDER BY id DESC LIMIT 1
-        """, requester_user_id, responder_uid)
+        # First, try to find the request by the identifier
+        # Try as request ID first
+        try:
+            req_id = int(identifier)
+            # Search by ID first
+            req_data = await fetch_one("""
+                SELECT * FROM contact_requests 
+                WHERE id = $1 AND status = 'pending'
+            """, req_id)
+            
+            if req_data:
+                # Verify this user is the intended recipient
+                if responder_uid != req_data['requested_user_id']:
+                    logger.warning(f"UNAUTHORIZED: User {responder_uid} tried to respond to request {req_id} meant for {req_data['requested_user_id']}")
+                    await callback_query.answer("You are not authorized to respond to this request.", show_alert=True)
+                    return
+            else:
+                # If not found by ID, try by requester_user_id
+                requester_user_id = int(identifier)
+                req_data = await fetch_one("""
+                    SELECT * FROM contact_requests 
+                    WHERE requester_user_id = $1 
+                    AND requested_user_id = $2 
+                    AND status = 'pending'
+                    ORDER BY id DESC LIMIT 1
+                """, requester_user_id, responder_uid)
+        except ValueError:
+            # Not a number, try as requester user ID
+            requester_user_id = int(identifier)
+            req_data = await fetch_one("""
+                SELECT * FROM contact_requests 
+                WHERE requester_user_id = $1 
+                AND requested_user_id = $2 
+                AND status = 'pending'
+                ORDER BY id DESC LIMIT 1
+            """, requester_user_id, responder_uid)
         
         if not req_data:
-            logger.error(f"No pending request found from {requester_user_id} to {responder_uid}")
-            await callback_query.answer("No pending request found.", show_alert=True)
+            logger.error(f"No pending request found for identifier {identifier} to {responder_uid}")
+            await callback_query.answer("No pending request found. It may have expired.", show_alert=True)
             return
         
         req_id = req_data['id']
         author_uid = req_data['requester_user_id']
         
         logger.info(f"Found request ID: {req_id}")
-        
-        # Check if this user is the intended recipient
-        if responder_uid != req_data['requested_user_id']:
-            logger.warning(f"UNAUTHORIZED: User {responder_uid} tried to respond to request {req_id} meant for {req_data['requested_user_id']}")
-            await callback_query.answer("You are not authorized to respond to this request.", show_alert=True)
-            return
-        
-        if req_data['status'] != 'pending':
-            await callback_query.answer(f"This request has already been {req_data['status']}.", show_alert=True)
-            return
         
         if action == "approve":
             try:
@@ -2887,6 +2902,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
