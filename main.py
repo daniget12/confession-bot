@@ -933,76 +933,60 @@ async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, co
     builder.adjust(3)
     keyboard = builder.as_markup()
     
-    # Determine reply-to message for threading
+    # Determine reply-to message for native Telegram threading
     reply_to_message_id = None
-    reply_prefix = ""
     
-    if parent_comment_id:
-        if parent_comment_id in message_id_map:
-            # We have the message ID for the parent comment
-            reply_to_message_id = message_id_map[parent_comment_id]
-            reply_prefix = f"↪️ <i>Replying to comment #{await get_comment_sequence_number(confession_id, parent_comment_id)}</i>\n\n"
-        else:
-            # Parent comment is on a different page, just show text reference
-            parent_seq = await get_comment_sequence_number(confession_id, parent_comment_id)
-            reply_prefix = f"↪️ <i>Replying to comment #{parent_seq}</i>\n\n"
+    if parent_comment_id and parent_comment_id in message_id_map:
+        # We have the message ID for the parent comment - use native Telegram reply
+        reply_to_message_id = message_id_map[parent_comment_id]
+        # NO text prefix - Telegram shows its own "Reply" label
     
     try:
         sent_message = None
         
         if c_data['sticker_file_id']:
-            # Send sticker and store the message
+            # Send sticker with native reply threading
             sticker_msg = await bot.send_sticker(
                 user_id, 
                 sticker=c_data['sticker_file_id'],
-                reply_to_message_id=reply_to_message_id
+                reply_to_message_id=reply_to_message_id  # Creates native reply
             )
             
-            # Log that we sent a sticker (optional)
-            logger.debug(f"Sent sticker for comment #{seq_num}: {sticker_msg.message_id}")
-            
-            # Then send the attribution message
-            text_content = f"{reply_prefix}{display_name}{admin_info}"
+            # Send attribution without any reply text
+            text_content = f"{display_name}{admin_info}"
             text_msg = await bot.send_message(
                 user_id, 
                 text_content, 
                 reply_markup=keyboard
             )
-            
-            # Store the text message ID for future replies (not the sticker)
             sent_message = text_msg
             
         elif c_data['animation_file_id']:
-            # Send animation and store the message
+            # Send animation with native reply threading
             animation_msg = await bot.send_animation(
                 user_id, 
                 animation=c_data['animation_file_id'],
-                reply_to_message_id=reply_to_message_id
+                reply_to_message_id=reply_to_message_id  # Creates native reply
             )
             
-            # Log that we sent an animation (optional)
-            logger.debug(f"Sent animation for comment #{seq_num}: {animation_msg.message_id}")
-            
-            # Then send the attribution message
-            text_content = f"{reply_prefix}{display_name}{admin_info}"
+            # Send attribution without any reply text
+            text_content = f"{display_name}{admin_info}"
             text_msg = await bot.send_message(
                 user_id, 
                 text_content, 
                 reply_markup=keyboard
             )
-            
-            # Store the text message ID for future replies
             sent_message = text_msg
             
         elif c_data['text']:
-            # Combine everything into one message for text comments
-            full_text = f"{reply_prefix}💬 {html.quote(c_data['text'])}\n\n{display_name}{admin_info}"
+            # Combine everything into one message with native reply threading
+            full_text = f"💬 {html.quote(c_data['text'])}\n\n{display_name}{admin_info}"
             sent_message = await bot.send_message(
                 user_id, 
                 full_text, 
                 reply_markup=keyboard, 
                 disable_web_page_preview=True,
-                reply_to_message_id=reply_to_message_id
+                reply_to_message_id=reply_to_message_id  # Creates native reply
             )
         
         return sent_message
@@ -2529,11 +2513,8 @@ async def browse_comments(callback_query: types.CallbackQuery):
         # Acknowledge and show comments
         await callback_query.answer("Loading comments...")
         
-        # Delete the original message if it exists to avoid clutter
-        try:
-            await callback_query.message.delete()
-        except:
-            pass
+        # DON'T delete the original message - keep the confession visible
+        # The user can still see the confession while comments load
         
         # Show comments
         await show_comments_for_confession(user_id, conf_id)
@@ -3244,6 +3225,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
