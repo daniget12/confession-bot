@@ -167,7 +167,7 @@ async def ensure_db_connection():
         return False
 
 
-# -
+# --- Database Helper Functions ---
 async def execute_query(query: str, *params):
     """Execute query and return results"""
     # Try using db_manager first
@@ -215,7 +215,6 @@ async def execute_insert_return_id(query: str, *params):
                 result = await conn.fetchval("SELECT LASTVAL();")
             return result
     raise Exception("No database connection available")
-        return result
 
 async def is_admin(user_id: int) -> bool:
     """Check if user is admin"""
@@ -3153,6 +3152,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
