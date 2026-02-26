@@ -837,21 +837,22 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
     # Get all comment IDs to build parent mapping
     comment_ids = [c['id'] for c in comments_raw]
     
-    # Pre-fetch all reactions for these comments in one query
-    reactions = await fetch_one("""
-        SELECT comment_id, 
-               SUM(CASE WHEN reaction_type = 'like' THEN 1 ELSE 0 END) as likes,
-               SUM(CASE WHEN reaction_type = 'dislike' THEN 1 ELSE 0 END) as dislikes
-        FROM reactions
-        WHERE comment_id = ANY($1::int[])
-        GROUP BY comment_id
-    """, comment_ids) if comment_ids else {}
+    # FIXED: Pre-fetch all reactions for these comments in one query
+    reactions_rows = []
+    if comment_ids:
+        reactions_rows = await execute_query("""
+            SELECT comment_id, 
+                   COALESCE(SUM(CASE WHEN reaction_type = 'like' THEN 1 ELSE 0 END), 0) as likes,
+                   COALESCE(SUM(CASE WHEN reaction_type = 'dislike' THEN 1 ELSE 0 END), 0) as dislikes
+            FROM reactions
+            WHERE comment_id = ANY($1::int[])
+            GROUP BY comment_id
+        """, comment_ids)
     
     # Build a map of comment_id -> (likes, dislikes)
     reaction_map = {}
-    if reactions:
-        for row in reactions:
-            reaction_map[row['comment_id']] = (row['likes'], row['dislikes'])
+    for row in reactions_rows:
+        reaction_map[row['comment_id']] = (row['likes'], row['dislikes'])
     
     if not comments_raw:
         await safe_send_message(user_id, f"<i>No comments on page {page}.</i>")
@@ -873,8 +874,8 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
             if sent_message:
                 message_id_map[c_data['id']] = sent_message.message_id
             
-            # Small delay to maintain Telegram rate limits but keep order
-            await asyncio.sleep(0.1)
+            # REMOVE this delay or reduce it significantly
+            # await asyncio.sleep(0.1)  # COMMENT THIS OUT FOR NOW
     
     # Navigation after all comments are sent
     nav_row = []
@@ -3243,6 +3244,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
