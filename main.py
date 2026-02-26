@@ -166,35 +166,55 @@ async def ensure_db_connection():
                 logger.error(f"Failed to reconnect to database: {reconnect_error}")
         return False
 
+
+# -
 async def execute_query(query: str, *params):
     """Execute query and return results"""
-    if not await ensure_db_connection():
-        raise Exception("Database connection not available")
-    async with db.acquire() as conn:
-        return await conn.fetch(query, *params)
+    # Try using db_manager first
+    if db_manager and db_manager.pool:
+        async with db_manager.pool.acquire() as conn:
+            return await conn.fetch(query, *params)
+    # Fallback to old db
+    if db:
+        async with db.acquire() as conn:
+            return await conn.fetch(query, *params)
+    raise Exception("No database connection available")
 
 async def fetch_one(query: str, *params):
     """Fetch single row"""
-    if not await ensure_db_connection():
-        raise Exception("Database connection not available")
-    async with db.acquire() as conn:
-        return await conn.fetchrow(query, *params)
+    if db_manager and db_manager.pool:
+        async with db_manager.pool.acquire() as conn:
+            return await conn.fetchrow(query, *params)
+    if db:
+        async with db.acquire() as conn:
+            return await conn.fetchrow(query, *params)
+    raise Exception("No database connection available")
 
 async def execute_update(query: str, *params):
     """Execute INSERT/UPDATE/DELETE query"""
-    if not await ensure_db_connection():
-        raise Exception("Database connection not available")
-    async with db.acquire() as conn:
-        return await conn.execute(query, *params)
+    if db_manager and db_manager.pool:
+        async with db_manager.pool.acquire() as conn:
+            return await conn.execute(query, *params)
+    if db:
+        async with db.acquire() as conn:
+            return await conn.execute(query, *params)
+    raise Exception("No database connection available")
 
 async def execute_insert_return_id(query: str, *params):
     """Execute INSERT and return inserted ID"""
-    if not await ensure_db_connection():
-        raise Exception("Database connection not available")
-    async with db.acquire() as conn:
-        result = await conn.fetchval(query, *params)
-        if result is None:
-            result = await conn.fetchval("SELECT LASTVAL();")
+    if db_manager and db_manager.pool:
+        async with db_manager.pool.acquire() as conn:
+            result = await conn.fetchval(query, *params)
+            if result is None:
+                result = await conn.fetchval("SELECT LASTVAL();")
+            return result
+    if db:
+        async with db.acquire() as conn:
+            result = await conn.fetchval(query, *params)
+            if result is None:
+                result = await conn.fetchval("SELECT LASTVAL();")
+            return result
+    raise Exception("No database connection available")
         return result
 
 async def is_admin(user_id: int) -> bool:
@@ -202,11 +222,8 @@ async def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 async def get_profile_name(user_id: int) -> str:
-    """Get user's profile name"""
-    row = await fetch_one("SELECT profile_name FROM user_status WHERE user_id = $1", user_id)
-    if row and row['profile_name']:
-        return row['profile_name']
-    return "Anonymous"
+    """Get user's profile name with caching"""
+    return await profile_cache.get_profile_name(user_id)
 
 def encode_user_id(user_id: int) -> str:
     """Encode user ID to a short, non-reversible string"""
@@ -231,18 +248,14 @@ async def get_user_id_from_encoded(encoded_id: str) -> Optional[int]:
         logger.error(f"Error decoding user ID: {e}")
     return None
 
-async def check_rate_limit(user_id: int) -> bool:
-    """Check if user is rate limited"""
-    current_time = time.time()
-    if current_time - user_last_action[user_id] < RATE_LIMIT_SECONDS:
-        return False
-    user_last_action[user_id] = current_time
-    return True
+
 
 # --- Database Setup ---
+
 async def create_db_pool():
-    """Create PostgreSQL connection pool for Supabase - FIXED for PgBouncer"""
-    global db
+    """Create PostgreSQL connection pool for Supabase - OPTIMIZED"""
+    global db, db_manager
+    db_manager = DatabaseManager()  # Initialize first
     try:
         connection_string = DATABASE_URL
         
@@ -257,20 +270,28 @@ async def create_db_pool():
             else:
                 connection_string += '?sslmode=require'
         
-        logger.info("Connecting to database with statement_cache_size=0 (for PgBouncer compatibility)...")
+        logger.info("Connecting to database with optimized settings...")
         
-        # CRITICAL FIX: Set statement_cache_size=0 for PgBouncer compatibility
+        # Create pool with optimized settings
         db = await asyncpg.create_pool(
             dsn=connection_string,
-            min_size=1,
-            max_size=10,
+            min_size=5,              # Increased from 1
+            max_size=20,              # Increased from 10
             command_timeout=60,
             max_queries=50000,
             max_inactive_connection_lifetime=300,
             timeout=30,
-            statement_cache_size=0  # This fixes the prepared statement error!
+            statement_cache_size=0    # Keep this for PgBouncer!
         )
-        logger.info("✅ Database connection pool created (PgBouncer compatible)")
+        
+        # Set the pool in db_manager
+        db_manager.pool = db
+        
+        logger.info("✅ Database connection pool created (optimized)")
+        
+        # Start background tasks
+        asyncio.create_task(rate_limiter.cleanup_task())
+        
         return db
     except Exception as e:
         logger.error(f"Failed to create database pool: {e}")
@@ -457,6 +478,120 @@ async def setup():
         logger.critical(f"Failed to setup: {e}")
         raise
 
+
+
+# --- Database Manager for Optimized Queries ---
+class DatabaseManager:
+    def __init__(self):
+        self.pool = None
+        self._last_check = 0
+        self._check_interval = 60
+    
+    async def init_pool(self, dsn):
+        self.pool = await asyncpg.create_pool(
+            dsn=dsn,
+            min_size=5,           # Keep 5 connections ready
+            max_size=20,           # Allow up to 20 concurrent connections
+            command_timeout=60,
+            max_queries=50000,
+            max_inactive_connection_lifetime=300,
+            timeout=30,
+            statement_cache_size=0
+        )
+        return self.pool
+    
+    async def fetch(self, query, *args):
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(query, *args)
+    
+    async def fetchrow(self, query, *args):
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(query, *args)
+    
+    async def execute(self, query, *args):
+        async with self.pool.acquire() as conn:
+            return await conn.execute(query, *args)
+    
+    async def fetch_batch_profiles(self, user_ids):
+        """Get multiple user profiles in one query"""
+        if not user_ids:
+            return {}
+        
+        rows = await self.fetch("""
+            SELECT 
+                u.user_id,
+                COALESCE(us.profile_name, 'Anonymous') as profile_name,
+                COALESCE(up.points, 0) as points
+            FROM unnest($1::bigint[]) u(user_id)
+            LEFT JOIN user_status us ON u.user_id = us.user_id
+            LEFT JOIN user_points up ON u.user_id = up.user_id
+        """, user_ids)
+        
+        return {row['user_id']: (row['profile_name'], row['points']) for row in rows}
+
+# Initialize database manager
+db_manager = None
+# --- Profile Cache for Faster Access ---
+class ProfileCache:
+    def __init__(self, ttl_seconds=300):
+        self.cache = {}
+        self.ttl = ttl_seconds
+    
+    async def get_profile_name(self, user_id: int) -> str:
+        """Get profile name with caching"""
+        cached = self.cache.get(user_id)
+        if cached and time.time() - cached['timestamp'] < self.ttl:
+            return cached['name']
+        
+        # Cache miss - fetch from database
+        row = await fetch_one("SELECT profile_name FROM user_status WHERE user_id = $1", user_id)
+        name = row['profile_name'] if row and row['profile_name'] else "Anonymous"
+        
+        self.cache[user_id] = {
+            'name': name,
+            'timestamp': time.time()
+        }
+        return name
+    
+    def invalidate(self, user_id: int):
+        """Remove user from cache when profile changes"""
+        self.cache.pop(user_id, None)
+
+
+
+# --- Optimized Rate Limiter ---
+class RateLimiter:
+    def __init__(self, rate_limit_seconds=30):
+        self.rate_limit = rate_limit_seconds
+        self.user_actions = {}
+    
+    def check_and_update(self, user_id: int) -> bool:
+        """Check rate limit and update timestamp"""
+        current_time = time.time()
+        last_time = self.user_actions.get(user_id, 0)
+        
+        if current_time - last_time < self.rate_limit:
+            return False
+        
+        self.user_actions[user_id] = current_time
+        return True
+    
+    async def cleanup_task(self):
+        """Background task to clean up old entries"""
+        while True:
+            await asyncio.sleep(300)  # Clean every 5 minutes
+            current_time = time.time()
+            cutoff = current_time - self.rate_limit * 2
+            self.user_actions = {
+                uid: ts for uid, ts in self.user_actions.items() 
+                if ts > cutoff
+            }
+
+# Initialize rate limiter
+rate_limiter = RateLimiter()
+
+# Initialize profile cache
+profile_cache = ProfileCache()
 # --- Middleware ---
 class BlockUserMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: types.TelegramObject, data: Dict[str, Any]) -> Any:
@@ -599,6 +734,29 @@ async def safe_send_message(user_id: int, text: str, **kwargs) -> Optional[types
         logger.error(f"Unexpected error sending message to {user_id}: {e}", exc_info=True)
     return None
 
+
+
+# --- Batch User Info Helper ---
+async def get_batch_user_profiles(user_ids: List[int]) -> Dict[int, Tuple[str, int]]:
+    """Get multiple users' profile info in one query"""
+    if not user_ids:
+        return {}
+    
+    # Remove duplicates
+    unique_ids = list(set(user_ids))
+    
+    rows = await execute_query("""
+        SELECT 
+            u.user_id,
+            COALESCE(us.profile_name, 'Anonymous') as profile_name,
+            COALESCE(up.points, 0) as points
+        FROM unnest($1::bigint[]) u(user_id)
+        LEFT JOIN user_status us ON u.user_id = us.user_id
+        LEFT JOIN user_points up ON u.user_id = up.user_id
+    """, unique_ids)
+    
+    return {row['user_id']: (row['profile_name'], row['points']) for row in rows}
+
 async def update_channel_post_button(confession_id: int):
     if not bot_info or not CHANNEL_ID:
         return
@@ -639,7 +797,6 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
     
     if not conf_data or conf_data['status'] != 'approved':
         err_txt = f"Confession #{confession_id} not found or not approved."
-        logger.warning(f"📝 SHOW COMMENTS - {err_txt}")
         if message_to_edit:
             await message_to_edit.edit_text(err_txt, reply_markup=None)
         else:
@@ -649,10 +806,6 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
     confession_owner_id = conf_data['user_id']
     total_row = await fetch_one("SELECT COUNT(*) as count FROM comments WHERE confession_id = $1", confession_id)
     total_count = total_row['count'] if total_row else 0
-    
-    logger.info(f"📝 SHOW COMMENTS - Total comments: {total_count}")
-    
-    # ... rest of the function
     
     if total_count == 0:
         msg_text = "<i>No comments yet. Be the first!</i>"
@@ -669,81 +822,37 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
     offset = (page - 1) * PAGE_SIZE
     
     comments_raw = await execute_query("""
-        SELECT c.id, c.user_id, c.text, c.sticker_file_id, c.animation_file_id, c.parent_comment_id, c.created_at, 
-               COALESCE(up.points, 0) as user_points, us.profile_name
+        SELECT c.id, c.user_id, c.text, c.sticker_file_id, c.animation_file_id, c.parent_comment_id, c.created_at
         FROM comments c 
-        LEFT JOIN user_points up ON c.user_id = up.user_id 
-        LEFT JOIN user_status us ON c.user_id = us.user_id
         WHERE c.confession_id = $1 
         ORDER BY c.created_at ASC LIMIT $2 OFFSET $3
     """, confession_id, PAGE_SIZE, offset)
-
-    db_id_to_message_id: Dict[int, int] = {}
+    
+    # OPTIMIZATION: Batch load all user profiles in ONE query
+    commenter_ids = [c['user_id'] for c in comments_raw]
+    commenter_ids.append(confession_owner_id)
+    users_info = await get_batch_user_profiles(commenter_ids)
+    
     is_admin_user = await is_admin(user_id)
-
+    
     if not comments_raw:
         await safe_send_message(user_id, f"<i>No comments on page {page}.</i>")
     else:
+        # Send comments in parallel
+        send_tasks = []
         for i, c_data in enumerate(comments_raw):
-            seq_num, db_id, commenter_uid = offset + i + 1, c_data['id'], c_data['user_id']
-            profile_name = c_data['profile_name'] if c_data['profile_name'] else "Anonymous"
-            aura_points = c_data['user_points'] if c_data['user_points'] is not None else 0
-            
-            tag_parts = []
-            if commenter_uid == confession_owner_id:
-                tag_parts.append("👑 Author")
-            if commenter_uid == user_id:
-                tag_parts.append("👤 You")
-            tag_str = f" ({', '.join(tag_parts)})" if tag_parts else ""
-            
-            encoded_profile_link = await get_encoded_profile_link(commenter_uid)
-            profile_link = f"https://t.me/{bot_info.username}?start=profile_{encode_user_id(commenter_uid)}"
-            display_name = f"<a href='{profile_link}'>{profile_name}</a> 🏅{aura_points}{tag_str}"
-            admin_info = f" [UID: <code>{commenter_uid}</code>]" if is_admin_user else ""
-
-            reply_to_msg_id = None
-            text_reply_prefix = ""
-            parent_db_id = c_data['parent_comment_id']
-            
-            if parent_db_id:
-                if parent_db_id in db_id_to_message_id:
-                    reply_to_msg_id = db_id_to_message_id[parent_db_id]
-                else:
-                    parent_seq_num = await get_comment_sequence_number(confession_id, parent_db_id)
-                    if parent_seq_num:
-                        text_reply_prefix = f"↪️ <i>Replying to comment #{parent_seq_num}...</i>\n"
-                    else:
-                        text_reply_prefix = "↪️ <i>Replying to another comment...</i>\n"
-
-            keyboard = await build_comment_keyboard(db_id, commenter_uid, user_id, confession_owner_id, is_admin_user)
-            
-            sent_message = None
-            try:
-                if c_data['sticker_file_id']:
-                    sent_message = await bot.send_sticker(user_id, sticker=c_data['sticker_file_id'], reply_to_message_id=reply_to_msg_id)
-                    await bot.send_message(user_id, f"{text_reply_prefix}{display_name}{admin_info}", reply_markup=keyboard)
-                    
-                    
-                    
-                elif c_data['animation_file_id']:
-                    sent_message = await bot.send_animation(user_id, animation=c_data['animation_file_id'], reply_to_message_id=reply_to_msg_id)
-                    await bot.send_message(user_id, f"{text_reply_prefix}{display_name}{admin_info}", reply_markup=keyboard)
-                    
-                   
-                    
-                elif c_data['text']:
-                    full_text = f"{text_reply_prefix}💬 {html.quote(c_data['text'])}\n\n{display_name}{admin_info}"
-                    sent_message = await bot.send_message(user_id, full_text, reply_markup=keyboard, disable_web_page_preview=True, reply_to_message_id=reply_to_msg_id)
-                    
-                    
-                
-                if sent_message:
-                    db_id_to_message_id[db_id] = sent_message.message_id
-            except Exception as e:
-                logger.warning(f"Could not send comment #{seq_num} to {user_id}: {e}")
-                await safe_send_message(user_id, f"⚠️ Error displaying comment #{seq_num}.")
-            await asyncio.sleep(0.1)
-
+            task = asyncio.create_task(
+                send_single_comment(
+                    user_id, i, c_data, confession_id, confession_owner_id,
+                    users_info, offset, is_admin_user, page, total_pages
+                )
+            )
+            send_tasks.append(task)
+        
+        # Wait for all sends to complete
+        await asyncio.gather(*send_tasks, return_exceptions=True)
+    
+    # Navigation after all comments are sent
     nav_row = []
     if page > 1:
         nav_row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"comments_page_{confession_id}_{page-1}"))
@@ -755,6 +864,51 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
     nav_keyboard = InlineKeyboardMarkup(inline_keyboard=[nav_row, [InlineKeyboardButton(text="➕ Add Comment", callback_data=f"add_{confession_id}")]])
     end_txt = f"--- Showing comments {offset+1} to {min(offset+PAGE_SIZE, total_count)} of {total_count} for Confession #{confession_id} ---"
     await safe_send_message(user_id, end_txt, reply_markup=nav_keyboard)
+
+# NEW helper function for sending single comment
+async def send_single_comment(user_id: int, index: int, c_data: dict, confession_id: int, 
+                              confession_owner_id: int, users_info: dict, offset: int, 
+                              is_admin_user: bool, page: int, total_pages: int):
+    """Send a single comment - can be run in parallel"""
+    seq_num = offset + index + 1
+    db_id = c_data['id']
+    commenter_uid = c_data['user_id']
+    
+    # Get user info from pre-loaded batch data
+    profile_name, points = users_info.get(commenter_uid, ("Anonymous", 0))
+    
+    tag_parts = []
+    if commenter_uid == confession_owner_id:
+        tag_parts.append("👑 Author")
+    if commenter_uid == user_id:
+        tag_parts.append("👤 You")
+    tag_str = f" ({', '.join(tag_parts)})" if tag_parts else ""
+    
+    # Use cache for profile link generation
+    encoded_profile_link = encode_user_id(commenter_uid)
+    profile_link = f"https://t.me/{bot_info.username}?start=profile_{encoded_profile_link}"
+    display_name = f"<a href='{profile_link}'>{profile_name}</a> 🏅{points}{tag_str}"
+    admin_info = f" [UID: <code>{commenter_uid}</code>]" if is_admin_user else ""
+    
+    keyboard = await build_comment_keyboard(db_id, commenter_uid, user_id, confession_owner_id, is_admin_user)
+    
+    try:
+        if c_data['sticker_file_id']:
+            # Send both messages in parallel
+            await asyncio.gather(
+                bot.send_sticker(user_id, sticker=c_data['sticker_file_id']),
+                bot.send_message(user_id, f"{display_name}{admin_info}", reply_markup=keyboard)
+            )
+        elif c_data['animation_file_id']:
+            await asyncio.gather(
+                bot.send_animation(user_id, animation=c_data['animation_file_id']),
+                bot.send_message(user_id, f"{display_name}{admin_info}", reply_markup=keyboard)
+            )
+        elif c_data['text']:
+            full_text = f"💬 {html.quote(c_data['text'])}\n\n{display_name}{admin_info}"
+            await bot.send_message(user_id, full_text, reply_markup=keyboard, disable_web_page_preview=True)
+    except Exception as e:
+        logger.warning(f"Could not send comment #{seq_num} to {user_id}: {e}")
 
 def create_profile_pagination_keyboard(base_callback: str, current_page: int, total_pages: int):
     builder = InlineKeyboardBuilder()
@@ -1106,6 +1260,8 @@ async def receive_profile_name(message: types.Message, state: FSMContext):
         "ON CONFLICT (user_id) DO UPDATE SET profile_name = EXCLUDED.profile_name",
         message.from_user.id, profile_name
     )
+    # Add this line after the database update:
+    profile_cache.invalidate(message.from_user.id)
     await message.answer(f"✅ Your display name has been updated to: <b>{html.quote(profile_name)}</b>")
     await state.clear()
 
@@ -1840,7 +1996,7 @@ async def receive_text_confession(message: types.Message, state: FSMContext):
     if message.text.startswith('/'):
         return
     
-    if not await check_rate_limit(message.from_user.id):
+    if not rate_limiter.check_and_update(message.from_user.id):
         await message.answer(f"⏳ Please wait {RATE_LIMIT_SECONDS} seconds between submissions.")
         return
     
@@ -1848,7 +2004,7 @@ async def receive_text_confession(message: types.Message, state: FSMContext):
 
 @dp.message(ConfessionForm.waiting_for_text, F.photo)
 async def receive_photo_confession(message: types.Message, state: FSMContext):
-    if not await check_rate_limit(message.from_user.id):
+    if not rate_limiter.check_and_update(message.from_user.id):
         await message.answer(f"⏳ Please wait {RATE_LIMIT_SECONDS} seconds between submissions.")
         return
     
@@ -2848,94 +3004,8 @@ async def confirm_broadcast(callback_query: types.CallbackQuery, state: FSMConte
     await state.clear()
     await callback_query.answer()
 
-@dp.callback_query(F.data == "confirm_broadcast")
-async def confirm_broadcast(callback_query: types.CallbackQuery, state: FSMContext):
-    if not await is_admin(callback_query.from_user.id):
-        await callback_query.answer("Unauthorized.", show_alert=True)
-        return
-    
-    data = await state.get_data()
-    from_chat_id = data.get('broadcast_from_chat_id')
-    msg_id = data.get('broadcast_message_id')
-    
-    if not from_chat_id or not msg_id:
-        await callback_query.answer("Error: Message data not found.", show_alert=True)
-        await state.clear()
-        return
-    
-    # Get all active users
-    users = await execute_query("SELECT user_id FROM user_status WHERE has_accepted_rules = TRUE AND is_blocked = FALSE")
-    total = len(users)
-    successful = 0
-    failed = 0
-    
-    progress = await callback_query.message.answer(f"📤 Broadcasting... 0/{total}")
-    
-    for i, row in enumerate(users):
-        try:
-            await bot.copy_message(
-                chat_id=row['user_id'],
-                from_chat_id=from_chat_id,
-                message_id=msg_id
-            )
-            successful += 1
-        except Exception as e:
-            failed += 1
-            logger.warning(f"Broadcast failed to {row['user_id']}: {e}")
-        
-        if i % 10 == 0:
-            try:
-                await progress.edit_text(f"📤 Broadcasting... {successful + failed}/{total}")
-            except:
-                pass
-        await asyncio.sleep(0.05)  # Small delay to avoid flooding
-    
-    await progress.edit_text(f"✅ Broadcast complete!\nSuccess: {successful}\nFailed: {failed}")
-    await callback_query.message.edit_text(f"✅ Broadcast completed.")
-    await state.clear()
-    await callback_query.answer()
 
-@dp.callback_query(F.data == "confirm_broadcast")
-async def confirm_broadcast(callback_query: types.CallbackQuery, state: FSMContext):
-    if not await is_admin(callback_query.from_user.id):
-        await callback_query.answer("Unauthorized.", show_alert=True)
-        return
-    
-    data = await state.get_data()
-    msg_id = data.get('broadcast_message_id')
-    chat_id = data.get('broadcast_chat_id')
-    
-    if not msg_id or not chat_id:
-        await callback_query.answer("Error: Message data not found.", show_alert=True)
-        await state.clear()
-        return
-    
-    users = await execute_query("SELECT user_id FROM user_status WHERE has_accepted_rules = TRUE AND is_blocked = FALSE")
-    total = len(users)
-    successful = 0
-    failed = 0
-    
-    progress = await callback_query.message.answer(f"📤 Broadcasting... 0/{total}")
-    
-    for i, row in enumerate(users):
-        try:
-            await bot.copy_message(chat_id=row['user_id'], from_chat_id=chat_id, message_id=msg_id)
-            successful += 1
-        except Exception as e:
-            failed += 1
-            logger.warning(f"Broadcast failed to {row['user_id']}: {e}")
-        
-        if i % 10 == 0:
-            try:
-                await progress.edit_text(f"📤 Broadcasting... {successful+failed}/{total}")
-            except:
-                pass
-        await asyncio.sleep(0.05)
-    
-    await progress.edit_text(f"✅ Broadcast complete!\nSuccess: {successful}\nFailed: {failed}")
-    await callback_query.message.edit_text(f"✅ Broadcast completed.")
-    await state.clear()
-    await callback_query.answer()
+
 
 @dp.callback_query(F.data == "cancel_broadcast")
 async def cancel_broadcast(callback_query: types.CallbackQuery, state: FSMContext):
@@ -3025,22 +3095,17 @@ async def set_bot_commands():
 
 async def monitor_database():
     while True:
+        await asyncio.sleep(300)
         try:
-            if db:
+            if db_manager and db_manager.pool:
+                async with db_manager.pool.acquire() as conn:
+                    await conn.fetchval('SELECT 1')
+            elif db:
                 async with db.acquire() as conn:
                     await conn.fetchval('SELECT 1')
         except Exception as e:
             logger.error(f"Database monitor error: {e}")
-            try:
-                await db.close()
-            except:
-                pass
-            try:
-                await create_db_pool()
-                logger.info("Database reconnected")
-            except Exception as reconnect_error:
-                logger.error(f"Failed to reconnect: {reconnect_error}")
-        await asyncio.sleep(300)
+            # Don't try to reconnect here - let the next query handle it
 
 # --- Main Execution ---
 async def main():
@@ -3088,6 +3153,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
