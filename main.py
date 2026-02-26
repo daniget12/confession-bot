@@ -2895,9 +2895,6 @@ async def get_user_id_command(message: types.Message):
     # Generate bot profile link
     profile_link = await get_encoded_profile_link(target_id)
     
-    # Generate direct message link that works for ALL users (even without username)
-    direct_message_link = f"tg://openmessage?user_id={target_id}"
-    
     # Check block status
     status = await fetch_one("SELECT is_blocked, blocked_until, block_reason FROM user_status WHERE user_id = $1", target_id)
     
@@ -2907,10 +2904,13 @@ async def get_user_id_command(message: types.Message):
     
     if target_username:
         response += f"<b>Username:</b> @{target_username}\n"
+        response += f"<b>Telegram Link:</b> https://t.me/{target_username}\n"
     else:
         response += f"<b>Username:</b> None (private)\n"
+        response += f"<b>Note:</b> Users without usernames can't be linked directly.\n"
     
     response += f"<b>Profile Name:</b> {html.quote(profile_name)}\n"
+    response += f"<b>Profile Link:</b> {profile_link}\n"
     response += f"<b>Aura Points:</b> {points}\n"
     
     if status and status['is_blocked']:
@@ -2934,18 +2934,15 @@ async def get_user_id_command(message: types.Message):
     else:
         keyboard.button(text="⛔ Block", callback_data=f"admin_block_{target_id}")
     
-    # Bot profile link button
-    keyboard.button(text="👤 Bot Profile", url=profile_link)
+    # Bot profile link button (always works)
+    keyboard.button(text="👤 View Bot Profile", url=profile_link)
     
-    # Direct message button (works for ALL users!)
-    keyboard.button(text="📱 Message User", url=direct_message_link)
-    
-    # If they have a username, add Telegram profile button too
+    # If they have username, add Telegram profile button
     if target_username:
-        keyboard.button(text="📎 Telegram Profile", url=f"https://t.me/{target_username}")
-        keyboard.adjust(2, 2)  # 2 rows of 2 buttons
+        keyboard.button(text="📱 Telegram Profile", url=f"https://t.me/{target_username}")
+        keyboard.adjust(2)  # 2 buttons per row
     else:
-        keyboard.adjust(2, 1)  # 2 buttons then 1 button
+        keyboard.adjust(2)  # Just 2 buttons
     
     await message.answer(response, reply_markup=keyboard.as_markup(), disable_web_page_preview=True)
 
@@ -3239,6 +3236,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
