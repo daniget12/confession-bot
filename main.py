@@ -2892,11 +2892,11 @@ async def get_user_id_command(message: types.Message):
     profile_name = await get_profile_name(target_id)
     points = await get_user_points(target_id)
     
-    # Generate profile link (always works, even without username)
+    # Generate bot profile link
     profile_link = await get_encoded_profile_link(target_id)
     
-    # Generate direct Telegram link (only works if they have username)
-    telegram_link = f"https://t.me/{target_username}" if target_username else None
+    # Generate direct message link that works for ALL users (even without username)
+    direct_message_link = f"tg://openmessage?user_id={target_id}"
     
     # Check block status
     status = await fetch_one("SELECT is_blocked, blocked_until, block_reason FROM user_status WHERE user_id = $1", target_id)
@@ -2907,14 +2907,10 @@ async def get_user_id_command(message: types.Message):
     
     if target_username:
         response += f"<b>Username:</b> @{target_username}\n"
-        response += f"<b>Telegram Link:</b> <a href='https://t.me/{target_username}'>Click to message</a>\n"
     else:
         response += f"<b>Username:</b> None (private)\n"
-        # Still provide a link - it will open Telegram but not a specific chat
-        response += f"<b>Telegram Link:</b> <a href='https://t.me/'>Open Telegram</a> (no username)\n"
     
     response += f"<b>Profile Name:</b> {html.quote(profile_name)}\n"
-    response += f"<b>Profile Link:</b> <a href='{profile_link}'>View in bot</a>\n"
     response += f"<b>Aura Points:</b> {points}\n"
     
     if status and status['is_blocked']:
@@ -2931,19 +2927,25 @@ async def get_user_id_command(message: types.Message):
     
     # Add quick action buttons for admins
     keyboard = InlineKeyboardBuilder()
+    
+    # Block/Unblock button
     if status and status['is_blocked']:
         keyboard.button(text="✅ Unblock", callback_data=f"admin_unblock_{target_id}")
     else:
         keyboard.button(text="⛔ Block", callback_data=f"admin_block_{target_id}")
     
-    # Always add the bot profile link button (works for all users)
-    keyboard.button(text="👤 View in Bot", url=profile_link)
+    # Bot profile link button
+    keyboard.button(text="👤 Bot Profile", url=profile_link)
     
-    # Add Telegram link button if they have username
+    # Direct message button (works for ALL users!)
+    keyboard.button(text="📱 Message User", url=direct_message_link)
+    
+    # If they have a username, add Telegram profile button too
     if target_username:
-        keyboard.button(text="📱 Telegram Profile", url=f"https://t.me/{target_username}")
-    
-    keyboard.adjust(2)
+        keyboard.button(text="📎 Telegram Profile", url=f"https://t.me/{target_username}")
+        keyboard.adjust(2, 2)  # 2 rows of 2 buttons
+    else:
+        keyboard.adjust(2, 1)  # 2 buttons then 1 button
     
     await message.answer(response, reply_markup=keyboard.as_markup(), disable_web_page_preview=True)
 
@@ -3237,6 +3239,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
