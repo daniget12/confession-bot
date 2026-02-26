@@ -834,22 +834,47 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
     
     is_admin_user = await is_admin(user_id)
     
+    # Get all comment IDs to build parent mapping
+    comment_ids = [c['id'] for c in comments_raw]
+    
+    # Pre-fetch all reactions for these comments in one query
+    reactions = await fetch_one("""
+        SELECT comment_id, 
+               SUM(CASE WHEN reaction_type = 'like' THEN 1 ELSE 0 END) as likes,
+               SUM(CASE WHEN reaction_type = 'dislike' THEN 1 ELSE 0 END) as dislikes
+        FROM reactions
+        WHERE comment_id = ANY($1::int[])
+        GROUP BY comment_id
+    """, comment_ids) if comment_ids else {}
+    
+    # Build a map of comment_id -> (likes, dislikes)
+    reaction_map = {}
+    if reactions:
+        for row in reactions:
+            reaction_map[row['comment_id']] = (row['likes'], row['dislikes'])
+    
     if not comments_raw:
         await safe_send_message(user_id, f"<i>No comments on page {page}.</i>")
     else:
-        # Send comments in parallel
-        send_tasks = []
-        for i, c_data in enumerate(comments_raw):
-            task = asyncio.create_task(
-                send_single_comment(
-                    user_id, i, c_data, confession_id, confession_owner_id,
-                    users_info, offset, is_admin_user, page, total_pages
-                )
-            )
-            send_tasks.append(task)
+        # Send comments IN ORDER (not parallel) to maintain sequence
+        message_id_map = {}  # Map comment_id to the sent message ID for replies
         
-        # Wait for all sends to complete
-        await asyncio.gather(*send_tasks, return_exceptions=True)
+        for i, c_data in enumerate(comments_raw):
+            seq_num = offset + i + 1
+            
+            # Send comment and store the message ID
+            sent_message = await send_single_comment_ordered(
+                user_id, i, c_data, confession_id, confession_owner_id,
+                users_info, offset, is_admin_user, page, total_pages,
+                reaction_map.get(c_data['id'], (0, 0)),
+                message_id_map  # Pass the map of parent message IDs
+            )
+            
+            if sent_message:
+                message_id_map[c_data['id']] = sent_message.message_id
+            
+            # Small delay to maintain Telegram rate limits but keep order
+            await asyncio.sleep(0.1)
     
     # Navigation after all comments are sent
     nav_row = []
@@ -865,13 +890,16 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
     await safe_send_message(user_id, end_txt, reply_markup=nav_keyboard)
 
 # NEW helper function for sending single comment
-async def send_single_comment(user_id: int, index: int, c_data: dict, confession_id: int, 
-                              confession_owner_id: int, users_info: dict, offset: int, 
-                              is_admin_user: bool, page: int, total_pages: int):
-    """Send a single comment - can be run in parallel"""
+async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, confession_id: int, 
+                                      confession_owner_id: int, users_info: dict, offset: int, 
+                                      is_admin_user: bool, page: int, total_pages: int,
+                                      reaction_counts: Tuple[int, int],
+                                      message_id_map: Dict[int, int]) -> Optional[types.Message]:
+    """Send a single comment in order with proper reply threading"""
     seq_num = offset + index + 1
     db_id = c_data['id']
     commenter_uid = c_data['user_id']
+    parent_comment_id = c_data['parent_comment_id']
     
     # Get user info from pre-loaded batch data
     profile_name, points = users_info.get(commenter_uid, ("Anonymous", 0))
@@ -883,31 +911,104 @@ async def send_single_comment(user_id: int, index: int, c_data: dict, confession
         tag_parts.append("👤 You")
     tag_str = f" ({', '.join(tag_parts)})" if tag_parts else ""
     
-    # Use cache for profile link generation
+    # Generate profile link
     encoded_profile_link = encode_user_id(commenter_uid)
     profile_link = f"https://t.me/{bot_info.username}?start=profile_{encoded_profile_link}"
     display_name = f"<a href='{profile_link}'>{profile_name}</a> 🏅{points}{tag_str}"
     admin_info = f" [UID: <code>{commenter_uid}</code>]" if is_admin_user else ""
     
-    keyboard = await build_comment_keyboard(db_id, commenter_uid, user_id, confession_owner_id, is_admin_user)
+    # Build keyboard with reactions
+    likes, dislikes = reaction_counts
+    builder = InlineKeyboardBuilder()
+    
+    if commenter_uid != user_id:
+        builder.button(text=f"👍 {likes}", callback_data=f"react_like_{db_id}")
+        builder.button(text=f"👎 {dislikes}", callback_data=f"react_dislike_{db_id}")
+    else:
+        builder.button(text=f"👍 {likes}", callback_data="noop")
+        builder.button(text=f"👎 {dislikes}", callback_data="noop")
+    
+    builder.button(text="↪️ Reply", callback_data=f"reply_{db_id}")
+    builder.adjust(3)
+    keyboard = builder.as_markup()
+    
+    # Determine reply-to message for threading
+    reply_to_message_id = None
+    reply_prefix = ""
+    
+    if parent_comment_id:
+        if parent_comment_id in message_id_map:
+            # We have the message ID for the parent comment
+            reply_to_message_id = message_id_map[parent_comment_id]
+            reply_prefix = f"↪️ <i>Replying to comment #{await get_comment_sequence_number(confession_id, parent_comment_id)}</i>\n\n"
+        else:
+            # Parent comment is on a different page, just show text reference
+            parent_seq = await get_comment_sequence_number(confession_id, parent_comment_id)
+            reply_prefix = f"↪️ <i>Replying to comment #{parent_seq}</i>\n\n"
     
     try:
+        sent_message = None
+        
         if c_data['sticker_file_id']:
-            # Send both messages in parallel
-            await asyncio.gather(
-                bot.send_sticker(user_id, sticker=c_data['sticker_file_id']),
-                bot.send_message(user_id, f"{display_name}{admin_info}", reply_markup=keyboard)
+            # Send sticker and store the message
+            sticker_msg = await bot.send_sticker(
+                user_id, 
+                sticker=c_data['sticker_file_id'],
+                reply_to_message_id=reply_to_message_id
             )
+            
+            # Log that we sent a sticker (optional)
+            logger.debug(f"Sent sticker for comment #{seq_num}: {sticker_msg.message_id}")
+            
+            # Then send the attribution message
+            text_content = f"{reply_prefix}{display_name}{admin_info}"
+            text_msg = await bot.send_message(
+                user_id, 
+                text_content, 
+                reply_markup=keyboard
+            )
+            
+            # Store the text message ID for future replies (not the sticker)
+            sent_message = text_msg
+            
         elif c_data['animation_file_id']:
-            await asyncio.gather(
-                bot.send_animation(user_id, animation=c_data['animation_file_id']),
-                bot.send_message(user_id, f"{display_name}{admin_info}", reply_markup=keyboard)
+            # Send animation and store the message
+            animation_msg = await bot.send_animation(
+                user_id, 
+                animation=c_data['animation_file_id'],
+                reply_to_message_id=reply_to_message_id
             )
+            
+            # Log that we sent an animation (optional)
+            logger.debug(f"Sent animation for comment #{seq_num}: {animation_msg.message_id}")
+            
+            # Then send the attribution message
+            text_content = f"{reply_prefix}{display_name}{admin_info}"
+            text_msg = await bot.send_message(
+                user_id, 
+                text_content, 
+                reply_markup=keyboard
+            )
+            
+            # Store the text message ID for future replies
+            sent_message = text_msg
+            
         elif c_data['text']:
-            full_text = f"💬 {html.quote(c_data['text'])}\n\n{display_name}{admin_info}"
-            await bot.send_message(user_id, full_text, reply_markup=keyboard, disable_web_page_preview=True)
+            # Combine everything into one message for text comments
+            full_text = f"{reply_prefix}💬 {html.quote(c_data['text'])}\n\n{display_name}{admin_info}"
+            sent_message = await bot.send_message(
+                user_id, 
+                full_text, 
+                reply_markup=keyboard, 
+                disable_web_page_preview=True,
+                reply_to_message_id=reply_to_message_id
+            )
+        
+        return sent_message
+        
     except Exception as e:
         logger.warning(f"Could not send comment #{seq_num} to {user_id}: {e}")
+        return None
 
 def create_profile_pagination_keyboard(base_callback: str, current_page: int, total_pages: int):
     builder = InlineKeyboardBuilder()
@@ -2394,61 +2495,51 @@ async def admin_reject_delete(callback_query: types.CallbackQuery):
 async def browse_comments(callback_query: types.CallbackQuery):
     """Browse comments for a confession"""
     try:
-        # Log the callback for debugging
         logger.info(f"📝 BROWSE COMMENTS - Callback: '{callback_query.data}'")
-        logger.info(f"📝 BROWSE COMMENTS - User: {callback_query.from_user.id}")
         
         # Parse confession ID
         parts = callback_query.data.split("_")
         if len(parts) < 2:
-            logger.error(f"Invalid browse callback format: {callback_query.data}")
             await callback_query.answer("Invalid callback data", show_alert=True)
             return
         
         conf_id = int(parts[1])
         user_id = callback_query.from_user.id
         
-        logger.info(f"📝 BROWSE COMMENTS - Confession ID: {conf_id}")
-        
         # Check if confession exists and is approved
         conf_data = await fetch_one("SELECT status, user_id FROM confessions WHERE id = $1", conf_id)
         
-        if not conf_data:
-            logger.error(f"Confession {conf_id} not found")
-            await callback_query.answer("Confession not found", show_alert=True)
-            return
-        
-        if conf_data['status'] != 'approved':
-            logger.warning(f"Confession {conf_id} is not approved (status: {conf_data['status']})")
-            await callback_query.answer("This confession is not approved yet", show_alert=True)
+        if not conf_data or conf_data['status'] != 'approved':
+            await callback_query.answer("This confession is not available", show_alert=True)
             return
         
         # Check if there are any comments
         count_row = await fetch_one("SELECT COUNT(*) as count FROM comments WHERE confession_id = $1", conf_id)
         comment_count = count_row['count'] if count_row else 0
         
-        logger.info(f"📝 BROWSE COMMENTS - Comment count: {comment_count}")
-        
         if comment_count == 0:
             await callback_query.answer("No comments yet", show_alert=True)
-            # Still show the add comment option
             nav = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="➕ Add Comment", callback_data=f"add_{conf_id}")]
             ])
             await safe_send_message(user_id, "No comments yet. Be the first to add one!", reply_markup=nav)
             return
         
-        # Show comments
+        # Acknowledge and show comments
         await callback_query.answer("Loading comments...")
+        
+        # Delete the original message if it exists to avoid clutter
+        try:
+            await callback_query.message.delete()
+        except:
+            pass
+        
+        # Show comments
         await show_comments_for_confession(user_id, conf_id)
         
-    except ValueError as e:
-        logger.error(f"Error parsing confession ID: {e}")
-        await callback_query.answer("Invalid confession ID", show_alert=True)
     except Exception as e:
         logger.error(f"Error in browse_comments: {e}", exc_info=True)
         await callback_query.answer("Error loading comments", show_alert=True)
-
 @dp.callback_query(F.data.startswith("add_"))
 async def add_comment_start(callback_query: types.CallbackQuery, state: FSMContext):
     conf_id = int(callback_query.data.split("_")[1])
@@ -3152,6 +3243,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
