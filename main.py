@@ -2952,45 +2952,378 @@ async def warn_user(message: types.Message):
         await message.answer("This command is for admins only.")
         return
     
-    if not message.reply_to_message:
-        await message.answer("Please reply to a user's message to warn them.")
-        return
+    target_id = None
+    reason = "No reason provided"
     
-    target_id = message.reply_to_message.from_user.id
-    reason = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else "No reason provided"
+    # Check if replying to a message
+    if message.reply_to_message:
+        target_id = message.reply_to_message.from_user.id
+        # Parse reason from command
+        parts = message.text.split(maxsplit=1)
+        if len(parts) > 1:
+            reason = parts[1]
+    else:
+        # Try to parse from command: /warn 123456789 Spamming
+        parts = message.text.split(maxsplit=2)
+        if len(parts) >= 2:
+            try:
+                target_id = int(parts[1])
+                if len(parts) >= 3:
+                    reason = parts[2]
+            except ValueError:
+                await message.answer("❌ Invalid user ID. Usage: /warn <user_id> [reason] or reply to a message")
+                return
+        else:
+            await message.answer("❌ Please provide a user ID or reply to a user's message to warn them.\nUsage: /warn <user_id> [reason]")
+            return
+    
+    # Get user info
+    profile_name = await get_profile_name(target_id)
     
     try:
-        await bot.send_message(
-            target_id,
-            f"⚠️ <b>Warning from Admin</b>\n\nReason: {html.quote(reason)}"
+        # Send warning to user
+        warning_text = (
+            f"⚠️ <b>Warning from Admin</b>\n\n"
+            f"<b>Reason:</b> {html.quote(reason)}\n\n"
+            f"Please follow the bot rules to avoid being blocked."
         )
-        await message.answer(f"✅ Warning sent to user ID {target_id}")
+        
+        await bot.send_message(target_id, warning_text)
+        
+        # Log the warning (you might want to create a warnings table)
+        logger.info(f"Admin {message.from_user.id} warned user {target_id}: {reason}")
+        
+        # Notify admin
+        await message.answer(
+            f"✅ Warning sent to user {target_id} ({profile_name})\n"
+            f"Reason: {reason}"
+        )
+        
+        # Optional: Notify other admins
+        for admin_id in ADMIN_IDS:
+            if admin_id != message.from_user.id:
+                await safe_send_message(
+                    admin_id,
+                    f"⚠️ <b>User Warned</b>\n\n"
+                    f"<b>Admin:</b> {message.from_user.id}\n"
+                    f"<b>User:</b> {target_id} ({profile_name})\n"
+                    f"<b>Reason:</b> {reason}"
+                )
+                
+    except TelegramForbiddenError:
+        await message.answer(f"❌ Cannot warn user {target_id}. They may have blocked the bot.")
     except Exception as e:
         await message.answer(f"❌ Could not send warning: {e}")
 
-@dp.message(Command("unblock"))
-async def unblock_user(message: types.Message):
+
+
+@dp.message(Command("block"))
+async def block_user_start(message: types.Message, state: FSMContext):
+    """Start block process - supports both reply and ID"""
     if not await is_admin(message.from_user.id):
         await message.answer("This command is for admins only.")
         return
     
-    if not message.reply_to_message:
-        await message.answer("Please reply to a user's message to unblock them.")
+    target_id = None
+    reason = None
+    
+    # Check if replying to a message
+    if message.reply_to_message:
+        target_id = message.reply_to_message.from_user.id
+        # Parse optional reason
+        parts = message.text.split(maxsplit=1)
+        if len(parts) > 1:
+            reason = parts[1]
+    else:
+        # Try to parse from command: /block 123456789 [reason]
+        parts = message.text.split(maxsplit=2)
+        if len(parts) >= 2:
+            try:
+                target_id = int(parts[1])
+                if len(parts) >= 3:
+                    reason = parts[2]
+            except ValueError:
+                await message.answer("❌ Invalid user ID. Usage: /block <user_id> [reason] or reply to a message")
+                return
+        else:
+            await message.answer("❌ Please provide a user ID or reply to a user's message to block them.")
+            return
+    
+    if target_id == message.from_user.id:
+        await message.answer("❌ You cannot block yourself.")
         return
     
-    target_id = message.reply_to_message.from_user.id
+    # Check if user exists
+    user_status = await fetch_one("SELECT profile_name, is_blocked FROM user_status WHERE user_id = $1", target_id)
+    if not user_status:
+        await message.answer("❌ User not found in database.")
+        return
     
+    if user_status['is_blocked']:
+        await message.answer(f"❌ User {target_id} is already blocked.")
+        return
+    
+    # Store target info in state
+    await state.update_data(
+        block_target_id=target_id,
+        block_reason=reason
+    )
+    
+    # Ask for block duration
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1 Hour", callback_data="block_1h")],
+        [InlineKeyboardButton(text="6 Hours", callback_data="block_6h")],
+        [InlineKeyboardButton(text="12 Hours", callback_data="block_12h")],
+        [InlineKeyboardButton(text="24 Hours", callback_data="block_24h")],
+        [InlineKeyboardButton(text="3 Days", callback_data="block_3d")],
+        [InlineKeyboardButton(text="7 Days", callback_data="block_7d")],
+        [InlineKeyboardButton(text="30 Days", callback_data="block_30d")],
+        [InlineKeyboardButton(text="🔴 PERMANENT", callback_data="block_permanent")],
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="block_cancel")]
+    ])
+    
+    profile_name = user_status['profile_name'] or "Anonymous"
+    await message.answer(
+        f"⛔ <b>Block User</b>\n\n"
+        f"<b>User:</b> {target_id} ({profile_name})\n"
+        f"<b>Reason:</b> {reason if reason else 'Not specified'}\n\n"
+        f"Select block duration:",
+        reply_markup=keyboard
+    )
+    
+    await state.set_state(BlockForm.waiting_for_block_duration)
+
+@dp.callback_query(StateFilter(BlockForm.waiting_for_block_duration), F.data.startswith("block_"))
+async def process_block_duration(callback_query: types.CallbackQuery, state: FSMContext):
+    """Process block duration selection"""
+    if not await is_admin(callback_query.from_user.id):
+        await callback_query.answer("Unauthorized.", show_alert=True)
+        return
+    
+    action = callback_query.data
+    
+    if action == "block_cancel":
+        await state.clear()
+        await callback_query.message.edit_text("❌ Block cancelled.")
+        await callback_query.answer()
+        return
+    
+    data = await state.get_data()
+    target_id = data.get('block_target_id')
+    reason = data.get('block_reason')
+    
+    if not target_id:
+        await state.clear()
+        await callback_query.answer("Error: Target user not found.", show_alert=True)
+        return
+    
+    # Calculate block expiration
+    now = datetime.now(datetime.utcnow().astimezone().tzinfo)
+    blocked_until = None
+    
+    if action == "block_permanent":
+        blocked_until = None  # Permanent block
+        duration_text = "PERMANENT"
+    else:
+        # Parse duration
+        duration_map = {
+            "block_1h": timedelta(hours=1),
+            "block_6h": timedelta(hours=6),
+            "block_12h": timedelta(hours=12),
+            "block_24h": timedelta(hours=24),
+            "block_3d": timedelta(days=3),
+            "block_7d": timedelta(days=7),
+            "block_30d": timedelta(days=30),
+        }
+        
+        if action in duration_map:
+            blocked_until = now + duration_map[action]
+            hours = duration_map[action].total_seconds() / 3600
+            if hours < 24:
+                duration_text = f"{int(hours)} hour{'s' if hours > 1 else ''}"
+            else:
+                days = hours / 24
+                duration_text = f"{int(days)} day{'s' if days > 1 else ''}"
+        else:
+            await callback_query.answer("Invalid duration.", show_alert=True)
+            return
+    
+    # Update database
+    await execute_update("""
+        UPDATE user_status 
+        SET is_blocked = TRUE, blocked_until = $1, block_reason = $2 
+        WHERE user_id = $3
+    """, blocked_until, reason, target_id)
+    
+    # Get user info for notification
+    profile_name = await get_profile_name(target_id)
+    
+    # Notify blocked user
+    try:
+        if blocked_until:
+            expiry_str = blocked_until.strftime('%Y-%m-%d %H:%M UTC')
+            block_message = (
+                f"⛔ <b>You have been blocked</b>\n\n"
+                f"<b>Duration:</b> Until {expiry_str}\n"
+                f"<b>Reason:</b> {reason if reason else 'Not specified'}\n\n"
+                f"Please contact an admin if you believe this is a mistake."
+            )
+        else:
+            block_message = (
+                f"🚫 <b>You have been permanently blocked</b>\n\n"
+                f"<b>Reason:</b> {reason if reason else 'Not specified'}\n\n"
+                f"This action cannot be automatically reversed."
+            )
+        
+        await bot.send_message(target_id, block_message)
+    except Exception as e:
+        logger.warning(f"Could not notify blocked user {target_id}: {e}")
+    
+    # Notify admin
+    await callback_query.message.edit_text(
+        f"✅ <b>User Blocked</b>\n\n"
+        f"<b>User ID:</b> {target_id}\n"
+        f"<b>Profile Name:</b> {profile_name}\n"
+        f"<b>Duration:</b> {duration_text}\n"
+        f"<b>Reason:</b> {reason if reason else 'Not specified'}",
+        reply_markup=None
+    )
+    
+    # Notify other admins
+    for admin_id in ADMIN_IDS:
+        if admin_id != callback_query.from_user.id:
+            await safe_send_message(
+                admin_id,
+                f"⛔ <b>User Blocked</b>\n\n"
+                f"<b>Admin:</b> {callback_query.from_user.id}\n"
+                f"<b>User:</b> {target_id} ({profile_name})\n"
+                f"<b>Duration:</b> {duration_text}\n"
+                f"<b>Reason:</b> {reason if reason else 'Not specified'}"
+            )
+    
+    await state.clear()
+    await callback_query.answer(f"✅ User blocked {duration_text.lower()}")
+
+@dp.message(Command("pblock"))
+async def permanent_block_user(message: types.Message):
+    """Quick permanent block command"""
+    if not await is_admin(message.from_user.id):
+        await message.answer("This command is for admins only.")
+        return
+    
+    target_id = None
+    reason = "No reason provided"
+    
+    # Check if replying to a message
+    if message.reply_to_message:
+        target_id = message.reply_to_message.from_user.id
+        parts = message.text.split(maxsplit=1)
+        if len(parts) > 1:
+            reason = parts[1]
+    else:
+        # Parse from command: /pblock 123456789 Spamming
+        parts = message.text.split(maxsplit=2)
+        if len(parts) >= 2:
+            try:
+                target_id = int(parts[1])
+                if len(parts) >= 3:
+                    reason = parts[2]
+            except ValueError:
+                await message.answer("❌ Invalid user ID. Usage: /pblock <user_id> [reason]")
+                return
+        else:
+            await message.answer("❌ Please provide a user ID or reply to a message.")
+            return
+    
+    if target_id == message.from_user.id:
+        await message.answer("❌ You cannot block yourself.")
+        return
+    
+    # Check if user exists
+    user_status = await fetch_one("SELECT profile_name FROM user_status WHERE user_id = $1", target_id)
+    if not user_status:
+        await message.answer("❌ User not found in database.")
+        return
+    
+    # Permanent block (blocked_until = NULL)
+    await execute_update("""
+        UPDATE user_status 
+        SET is_blocked = TRUE, blocked_until = NULL, block_reason = $1 
+        WHERE user_id = $2
+    """, reason, target_id)
+    
+    profile_name = user_status['profile_name'] or "Anonymous"
+    
+    # Notify user
+    try:
+        await bot.send_message(
+            target_id,
+            f"🚫 <b>You have been permanently blocked</b>\n\n"
+            f"<b>Reason:</b> {html.quote(reason)}\n\n"
+            f"This action cannot be automatically reversed."
+        )
+    except Exception as e:
+        logger.warning(f"Could not notify user {target_id}: {e}")
+    
+    await message.answer(
+        f"✅ <b>User Permanently Blocked</b>\n\n"
+        f"<b>User ID:</b> {target_id}\n"
+        f"<b>Profile Name:</b> {profile_name}\n"
+        f"<b>Reason:</b> {reason}"
+    )
+
+@dp.message(Command("unblock"))
+async def unblock_user(message: types.Message):
+    """Unblock a user - supports both reply and ID"""
+    if not await is_admin(message.from_user.id):
+        await message.answer("This command is for admins only.")
+        return
+    
+    target_id = None
+    
+    # Check if replying to a message
+    if message.reply_to_message:
+        target_id = message.reply_to_message.from_user.id
+    else:
+        # Parse from command: /unblock 123456789
+        parts = message.text.split()
+        if len(parts) >= 2:
+            try:
+                target_id = int(parts[1])
+            except ValueError:
+                await message.answer("❌ Invalid user ID. Usage: /unblock <user_id> or reply to a message")
+                return
+        else:
+            await message.answer("❌ Please provide a user ID or reply to a user's message to unblock them.")
+            return
+    
+    # Check if user is actually blocked
+    user_status = await fetch_one("SELECT is_blocked, profile_name FROM user_status WHERE user_id = $1", target_id)
+    if not user_status:
+        await message.answer("❌ User not found in database.")
+        return
+    
+    if not user_status['is_blocked']:
+        await message.answer(f"❌ User {target_id} is not blocked.")
+        return
+    
+    # Unblock user
     await execute_update(
         "UPDATE user_status SET is_blocked = FALSE, blocked_until = NULL, block_reason = NULL WHERE user_id = $1",
         target_id
     )
     
-    try:
-        await bot.send_message(target_id, "✅ You have been unblocked.")
-    except:
-        pass
+    profile_name = user_status['profile_name'] or "Anonymous"
     
-    await message.answer(f"✅ User {target_id} unblocked.")
+    # Notify user
+    try:
+        await bot.send_message(target_id, "✅ You have been unblocked and can now use the bot again.")
+    except Exception as e:
+        logger.warning(f"Could not notify user {target_id}: {e}")
+    
+    await message.answer(f"✅ User {target_id} ({profile_name}) has been unblocked.")
+
+
 
 @dp.message(Command("broadcast"))
 async def broadcast_command(message: types.Message, state: FSMContext):
@@ -3236,6 +3569,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
+
 
 
 
