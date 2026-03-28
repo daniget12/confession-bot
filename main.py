@@ -874,10 +874,7 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
             if sent_message:
                 message_id_map[c_data['id']] = sent_message.message_id
             
-            # REMOVE this delay or reduce it significantly
-            # await asyncio.sleep(0.1)  # COMMENT THIS OUT FOR NOW
-    
-    # Navigation after all comments are sent
+
     nav_row = []
     if page > 1:
         nav_row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"comments_page_{confession_id}_{page-1}"))
@@ -906,16 +903,25 @@ async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, co
     profile_name, points = users_info.get(commenter_uid, ("Anonymous", 0))
     
     tag_parts = []
-    if commenter_uid == confession_owner_id:
-        tag_parts.append("👑 Author")
+    is_author = (commenter_uid == confession_owner_id)
+    
     if commenter_uid == user_id:
         tag_parts.append("👤 You")
     tag_str = f" ({', '.join(tag_parts)})" if tag_parts else ""
     
-    # Generate profile link
+    # Generate profile link for all users
     encoded_profile_link = encode_user_id(commenter_uid)
     profile_link = f"https://t.me/{bot_info.username}?start=profile_{encoded_profile_link}"
-    display_name = f"<a href='{profile_link}'>{profile_name}</a> 🏅{points}{tag_str}"
+    
+    # Check if this is the confession owner commenting on their own confession
+    if is_author and commenter_uid == confession_owner_id:
+        # For confession owner: show "👑 Author" as a clickable link without name
+        # The link goes to their profile
+        display_name = f"<a href='{profile_link}'>👑 Author</a> 🏅{points}{tag_str}"
+    else:
+        # For regular users: show their actual name with link
+        display_name = f"<a href='{profile_link}'>{profile_name}</a> 🏅{points}{tag_str}"
+    
     admin_info = f" [UID: <code>{commenter_uid}</code>]" if is_admin_user else ""
     
     # Build keyboard with reactions
@@ -979,8 +985,14 @@ async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, co
             sent_message = text_msg
             
         elif c_data['text']:
-            # Combine everything into one message with native reply threading
-            full_text = f"💬 {html.quote(c_data['text'])}\n\n{display_name}{admin_info}"
+            # Check if this is the author commenting on their own confession
+            if is_author and commenter_uid == confession_owner_id:
+                # For author commenting on own confession: show "👑 Author" as clickable link
+                full_text = f"💬 {html.quote(c_data['text'])}\n\n<a href='{profile_link}'>👑 Author</a> 🏅{points}{tag_str}{admin_info}"
+            else:
+                # Regular comment with profile link and actual name
+                full_text = f"💬 {html.quote(c_data['text'])}\n\n{display_name}{admin_info}"
+            
             sent_message = await bot.send_message(
                 user_id, 
                 full_text, 
