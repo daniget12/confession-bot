@@ -43,6 +43,9 @@ POINTS_PER_LIKE_RECEIVED = 1
 POINTS_PER_DISLIKE_RECEIVED = -1
 MAX_CATEGORIES = 3
 MAX_PHOTO_SIZE_MB = 5
+MAX_VIDEO_SIZE_MB = 50
+MAX_AUDIO_SIZE_MB = 20
+SUPPORTED_AUDIO_MIME_TYPES = {'audio/mpeg', 'audio/mp3', 'audio/ogg', 'audio/aac', 'audio/m4a'}
 RATE_LIMIT_SECONDS = 30
 
 # Load environment variables
@@ -107,6 +110,7 @@ user_last_action = defaultdict(float)
 class ConfessionForm(StatesGroup):
     selecting_categories = State()
     waiting_for_text = State()
+    waiting_for_voice_choice = State()
 
 class CommentForm(StatesGroup):
     waiting_for_comment = State()
@@ -461,6 +465,25 @@ async def setup():
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
             """)
+            await conn.execute("""
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                     WHERE table_name='confessions' AND column_name='video_file_id') THEN
+                    ALTER TABLE confessions ADD COLUMN video_file_id TEXT NULL;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name='confessions' AND column_name='audio_file_id') THEN
+                    ALTER TABLE confessions ADD COLUMN audio_file_id TEXT NULL;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name='confessions' AND column_name='duration_seconds') THEN
+                      ALTER TABLE confessions ADD COLUMN duration_seconds INTEGER NULL;
+                END IF;
+                END $$;
+            """)
+            logger.info("✅ Added video/audio columns to confessions table")
+            
             
             # Create indexes for new tables
             await conn.execute("""
@@ -2067,8 +2090,10 @@ async def handle_category_selection(callback_query: types.CallbackQuery, state: 
         await callback_query.message.edit_text(
             f"✅ <b>Categories selected:</b> {category_tags}\n\n"
             f"📝 <b>Now, send your confession:</b>\n\n"
-            f"• Text only: Send your confession text\n"
-            f"• Text with photo: Send a photo with caption\n\n"
+            f"• <b>Text only:</b> Send your confession text\n"
+            f"• <b>Text with photo:</b> Send a photo with caption\n"
+            f"• <b>Text with video:</b> Send a video with caption\n"
+            f"• <b>Text with audio:</b> Send an audio file with caption\n\n"
             f"<i>Type /cancel to abort.</i>"
         )
         await callback_query.answer()
@@ -2118,6 +2143,169 @@ async def receive_photo_confession(message: types.Message, state: FSMContext):
         return
     
     await process_confession(message, state, text=text, photo_file_id=photo_file_id)
+
+@dp.message(ConfessionForm.waiting_for_text, F.video)
+async def receive_video_confession(message: types.Message, state: FSMContext):
+    if not rate_limiter.check_and_update(message.from_user.id):
+        await message.answer(f"⏳ Please wait {RATE_LIMIT_SECONDS} seconds between submissions.")
+        return
+    
+    video_file_id = message.video.file_id
+    text = message.caption or ""
+    
+    if not text.strip():
+        await message.answer("❌ Please add a caption to your video.")
+        return
+    
+    file_size_mb = message.video.file_size / (1024 * 1024) if message.video.file_size else 0
+    if file_size_mb > MAX_VIDEO_SIZE_MB:
+        await message.answer(f"❌ Video too large ({file_size_mb:.1f}MB). Max {MAX_VIDEO_SIZE_MB}MB.")
+        return
+    
+    duration = message.video.duration if message.video.duration else None
+    
+    await process_media_confession(message, state, text=text, video_file_id=video_file_id, 
+                                   audio_file_id=None, duration=duration, media_type="video")
+
+@dp.message(ConfessionForm.waiting_for_text, F.audio | F.voice)
+async def receive_audio_confession(message: types.Message, state: FSMContext):
+    if not rate_limiter.check_and_update(message.from_user.id):
+        await message.answer(f"⏳ Please wait {RATE_LIMIT_SECONDS} seconds between submissions.")
+        return
+    
+    # Ask user about voice modification
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎭 Anonymize Voice (Recommended)", callback_data="voice_anon_yes")],
+        [InlineKeyboardButton(text="🎤 Keep Original Voice", callback_data="voice_anon_no")]
+    ])
+    
+    audio_file_id = message.audio.file_id if message.audio else message.voice.file_id
+    is_voice = bool(message.voice)
+    text = message.caption or ""
+    
+    if not text.strip():
+        await message.answer("❌ Please add a caption to your audio.")
+        return
+    
+    await state.update_data(
+        audio_file_id=audio_file_id,
+        is_voice=is_voice,
+        audio_text=text,
+        audio_duration=message.audio.duration if message.audio else (message.voice.duration if message.voice else None)
+    )
+    await state.set_state(ConfessionForm.waiting_for_voice_choice)
+    
+    await message.answer(
+        "🎙️ <b>Privacy Option</b>\n\n"
+        "For your safety, you can anonymize your voice.\n\n"
+        "Choose an option:",
+        reply_markup=keyboard
+    )
+
+
+@dp.callback_query(StateFilter(ConfessionForm.waiting_for_voice_choice), F.data.startswith("voice_anon_"))
+async def handle_voice_choice(callback_query: types.CallbackQuery, state: FSMContext):
+    choice = callback_query.data.split("_")[-1]
+    state_data = await state.get_data()
+    
+    await process_media_confession(
+        callback_query.message, 
+        state, 
+        text=state_data.get('audio_text', ''),
+        audio_file_id=state_data.get('audio_file_id'),
+        is_voice=state_data.get('is_voice', False),
+        duration=state_data.get('audio_duration'),
+        media_type="audio",
+        voice_modified=(choice == "yes")
+    )
+    
+    await callback_query.answer()
+    await state.clear()
+
+async def process_media_confession(message: types.Message, state: FSMContext, text: str, 
+                                   video_file_id: Optional[str] = None, 
+                                   audio_file_id: Optional[str] = None,
+                                   duration: Optional[int] = None,
+                                   media_type: str = "text",
+                                   is_voice: bool = False,
+                                   voice_modified: bool = False):
+    """Process video or audio confession"""
+    user_id = message.from_user.id if isinstance(message, types.Message) else message.chat.id
+    state_data = await state.get_data()
+    selected_categories = state_data.get("selected_categories", [])
+    
+    if not selected_categories:
+        await message.answer("⚠️ Error: Category info lost. Please start again with /confess.")
+        await state.clear()
+        return
+    
+    if len(text) < 10:
+        await message.answer("❌ Confession too short (minimum 10 characters).")
+        return
+    
+    if len(text) > 3900:
+        await message.answer("❌ Confession too long (maximum 3900 characters).")
+        return
+    
+    try:
+        query = """
+            INSERT INTO confessions (text, user_id, categories, status, 
+                                    video_file_id, audio_file_id, duration_seconds) 
+            VALUES ($1, $2, $3::text[], 'pending', $4, $5, $6)
+            RETURNING id
+        """
+        conf_id = await execute_insert_return_id(query, text, user_id, selected_categories, 
+                                                video_file_id, audio_file_id, duration)
+        
+        if not conf_id:
+            raise Exception("Failed to get confession ID")
+        
+        await update_user_points(user_id, POINTS_PER_CONFESSION)
+        
+        category_tags = " ".join([f"#{html.quote(cat)}" for cat in selected_categories])
+        media_emoji = "🎥" if video_file_id else ("🎤" if is_voice else "🎵")
+        media_label = "Video" if video_file_id else ("Voice" if is_voice else "Audio")
+        
+        if voice_modified:
+            media_label += " (Voice Anonymized)"
+        
+        # Prepare admin notification
+        admin_caption = (
+            f"{media_emoji} <b>New {media_label} Confession Review</b>\n"
+            f"<b>ID:</b> {conf_id}\n"
+            f"<b>Categories:</b> {category_tags}\n"
+            f"<b>User ID:</b> <code>{user_id}</code>\n"
+            f"<b>Duration:</b> {duration}s\n\n"
+            f"<b>Text:</b>\n{html.quote(text)}"
+        )
+        admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Approve", callback_data=f"approve_{conf_id}"),
+             InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_{conf_id}")]
+        ])
+        
+        # Send to admins
+        for admin_id in ADMIN_IDS:
+            try:
+                if video_file_id:
+                    await bot.send_video(chat_id=admin_id, video=video_file_id, 
+                                        caption=admin_caption, reply_markup=admin_keyboard)
+                elif audio_file_id:
+                    if is_voice:
+                        await bot.send_voice(chat_id=admin_id, voice=audio_file_id, 
+                                           caption=admin_caption, reply_markup=admin_keyboard)
+                    else:
+                        await bot.send_audio(chat_id=admin_id, audio=audio_file_id, 
+                                           caption=admin_caption, reply_markup=admin_keyboard)
+            except Exception as e:
+                logger.warning(f"Could not send to admin {admin_id}: {e}")
+        
+        await message.answer(f"✅ Your {media_label.lower()} confession has been submitted! (ID: #{conf_id})")
+        
+    except Exception as e:
+        logger.error(f"Error processing {media_type} confession: {e}", exc_info=True)
+        await message.answer("❌ An error occurred. Please try again.")
+    finally:
+        await state.clear()
 
 async def process_confession(message: types.Message, state: FSMContext, text: str, photo_file_id: Optional[str] = None):
     user_id = message.from_user.id
@@ -2334,8 +2522,7 @@ async def handle_approve_confession(callback_query: types.CallbackQuery, state: 
         return
     
     conf_id = int(callback_query.data.split("_")[1])
-    conf = await fetch_one("SELECT id, text, user_id, categories, status, photo_file_id FROM confessions WHERE id = $1", conf_id)
-    
+    conf = await fetch_one("SELECT id, text, user_id, categories, status, photo_file_id, video_file_id, audio_file_id, duration_seconds FROM confessions WHERE id = $1", conf_id)
     if not conf:
         await callback_query.answer("Confession not found.", show_alert=True)
         return
@@ -2348,8 +2535,18 @@ async def handle_approve_confession(callback_query: types.CallbackQuery, state: 
         link = f"https://t.me/{bot_info.username}?start=view_{conf['id']}"
         categories = conf['categories'] or []
         category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories])
+        if conf['video_file_id']:
+            channel_caption = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
+            channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
+            msg = await bot.send_video(chat_id=CHANNEL_ID, video=conf['video_file_id'], caption=channel_caption, reply_markup=channel_kbd,duration=conf.get('duration_seconds'))
+
+        elif conf['audio_file_id']:
+            channel_caption = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
+            channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
+            msg = await bot.send_audio(chat_id=CHANNEL_ID, audio=conf['audio_file_id'], caption=channel_caption, reply_markup=channel_kbd, duration=conf.get('duration_seconds'))
+
         
-        if conf['photo_file_id']:
+        elif conf['photo_file_id']:
             channel_caption = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
             channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
             msg = await bot.send_photo(chat_id=CHANNEL_ID, photo=conf['photo_file_id'], caption=channel_caption, reply_markup=channel_kbd)
@@ -3581,47 +3778,3 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Unhandled exception: {e}")
         asyncio.run(shutdown())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
