@@ -2813,6 +2813,21 @@ async def process_comment(message: types.Message, state: FSMContext, text: Optio
         
         await update_user_points(user_id, 1)
         
+        # --- NEW: Notify parent comment owner about reply ---
+        if parent_comment_id:
+            parent_comment = await fetch_one("SELECT user_id FROM comments WHERE id = $1", parent_comment_id)
+            if parent_comment and parent_comment['user_id'] != user_id:
+                replier_name = await get_profile_name(user_id)
+                parent_owner_id = parent_comment['user_id']
+                conf_link = f"https://t.me/{bot_info.username}?start=view_{confession_id}"
+                notification = (
+                    f"↪️ <b>Someone replied to your comment!</b>\n\n"
+                    f"<b>{replier_name}</b> replied to your comment on <a href='{conf_link}'>Confession #{confession_id}</a>.\n\n"
+                    f"Check it out!"
+                )
+                await safe_send_message(parent_owner_id, notification, disable_web_page_preview=True)
+        
+        # Notify confession owner (existing code)
         conf_owner = await fetch_one("SELECT user_id FROM confessions WHERE id = $1", confession_id)
         if conf_owner and conf_owner['user_id'] != user_id:
             await safe_send_message(
@@ -2870,7 +2885,18 @@ async def handle_reaction(callback_query: types.CallbackQuery, reaction_type: st
         await execute_update("INSERT INTO reactions (comment_id, user_id, reaction_type) VALUES ($1, $2, $3)", comment_id, user_id, reaction_type)
         points_change = POINTS_PER_LIKE_RECEIVED if reaction_type == "like" else POINTS_PER_DISLIKE_RECEIVED
         await update_user_points(comment_owner_id, points_change)
+
+        # --- NEW: Notify comment owner about like (only when new like) ---
+        if reaction_type == "like":
+            liker_name = await get_profile_name(user_id)
+            notification = (
+                f"👍 <b>Someone liked your comment!</b>\n\n"
+                f"<b>{liker_name}</b> liked your comment.\n\n"
+                f"Keep sharing your thoughts!"
+            )
+            await safe_send_message(comment_owner_id, notification)
     
+    # ... rest of the function (update UI, etc.) unchanged ...
     likes, dislikes = await get_comment_reactions(comment_id)
     
     message = callback_query.message
