@@ -35,7 +35,7 @@ This bot is packed with features designed for robust community management and us
 
 For a complete step-by-step setup guide, a deep-dive into every feature, a live showcase of bots using this code, and interactive examples, please visit the official documentation page.
 
-### [**View the Full Documentation Page**](https://addisuderrese.github.io/confessions-bot/)
+### [**View the Full Documentation Page**](https://daniget12.github.io/confessions-bot/)
 
 The documentation page provides a much richer, more detailed, and interactive experience for getting your bot up and running.
 
@@ -47,7 +47,7 @@ For experienced users, here is the quick setup process. For detailed explanation
 
 **1. Clone the repository:**
 ```bash
-git clone https://github.com/addisuderrese/confessions-bot.git
+git clone https://github.com/daniget12/confessions-bot.git
 cd confessions-bot 
 ```
 
