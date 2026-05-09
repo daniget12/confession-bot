@@ -1262,7 +1262,7 @@ async def privacy_command(message: types.Message):
     privacy_text = (
         "🔒 <b>Privacy Information</b>\n\n"
         "<b>What we store:</b>\n"
-        "• Your Telegram User ID\n"
+        
         "• Confessions you submit (anonymous)\n"
         "• Comments you make (with display name)\n"
         "• Your display name preference\n"
