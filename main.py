@@ -1043,7 +1043,28 @@ def create_profile_pagination_keyboard(base_callback: str, current_page: int, to
         builder.row(*row)
     builder.row(InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_main"))
     return builder.as_markup()
-
+def get_main_menu_keyboard(is_admin: bool = False):
+    """Create the main menu keyboard that appears above the text input"""
+    
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📝 Confess"), KeyboardButton(text="👤 Profile")],
+            [KeyboardButton(text="❓ Help"), KeyboardButton(text="📜 Rules")],
+            [KeyboardButton(text="🔒 Privacy"), KeyboardButton(text="💬 End Chat")],
+            [KeyboardButton(text="❌ Cancel")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Choose an option..."
+    )
+    
+    if is_admin:
+        keyboard.keyboard.append([
+            KeyboardButton(text="👑 Admin Panel"),
+            KeyboardButton(text="📊 Stats")
+        ])
+    
+    return keyboard
 
 # --- Start Command ---
 @dp.message(Command("start"))
@@ -1188,16 +1209,10 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
         welcome_text = (
             f"👋 Welcome back, <b>{profile_name}</b>!\n\n"
             f"🏅 <b>Your Aura:</b> {points}\n\n"
-            "<b>Available Commands:</b>\n"
-            "🔹 /confess - Submit anonymous confession\n"
-            "🔹 /profile - View and manage your profile\n"
-            "🔹 /help - Show all commands\n"
-            "🔹 /rules - View bot rules\n"
-            "🔹 /privacy - Privacy information\n"
-            "🔹 /cancel - Cancel current action\n"
-            "🔹 /endchat - End current chat"
+            f"Use the buttons below to navigate 👇"
         )
-        await message.answer(welcome_text, reply_markup=ReplyKeyboardRemove())
+        is_admin_user = await is_admin(user_id)
+        await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(is_admin_user))
 
 @dp.callback_query(F.data == "accept_rules")
 async def handle_accept_rules(callback_query: types.CallbackQuery):
@@ -1211,10 +1226,32 @@ async def handle_accept_rules(callback_query: types.CallbackQuery):
     await callback_query.message.edit_text(
         "✅ <b>Rules Accepted!</b>\n\n"
         "Welcome to the confession bot!\n\n"
-        "Use /confess to share anonymously, /profile to customize your profile.",
+        "Use the buttons below to get started 👇",
         reply_markup=None
     )
+    
+    # Show the menu keyboard
+    is_admin_user = await is_admin(user_id)
+    await callback_query.message.answer(
+        "Choose an option:",
+        reply_markup=get_main_menu_keyboard(is_admin_user)
+    )
+    
     await callback_query.answer("Rules accepted!")
+
+
+
+@dp.message(Command("cancel"))
+async def cancel_command(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
+        await message.answer("No active operation to cancel.")
+        return
+    await state.clear()
+    await message.answer("❌ Operation cancelled.", reply_markup=ReplyKeyboardRemove())
+    # Show menu again after cancellation
+    is_admin_user = await is_admin(message.from_user.id)
+    await message.answer("Here's your menu:", reply_markup=get_main_menu_keyboard(is_admin_user))
 
 # --- Help Command ---
 @dp.message(Command("help"))
@@ -1234,13 +1271,15 @@ async def help_command(message: types.Message):
         "• See your confessions and comments\n"
         "• Manage active chats\n"
         "• Request contact with other users\n\n"
-        "<i>Click on user names in comments to view their profiles.</i>"
+        "<i>Use the menu buttons below for quick access!</i>"
     )
     
     if await is_admin(message.from_user.id):
         help_text += "\n\n<b>Admin Commands:</b>\n/admin - Admin panel\n/id - Get user info\n/warn - Warn a user\n/block - Block user\n/unblock - Unblock user\n/stats - Bot statistics\n/broadcast - Broadcast message"
     
-    await message.answer(help_text)
+    # Show menu keyboard instead of removing it
+    is_admin_user = await is_admin(message.from_user.id)
+    await message.answer(help_text, reply_markup=get_main_menu_keyboard(is_admin_user))
 
 # --- Rules Command ---
 @dp.message(Command("rules"))
@@ -3249,6 +3288,53 @@ async def warn_user(message: types.Message):
         await message.answer(f"❌ Cannot warn user {target_id}. They may have blocked the bot.")
     except Exception as e:
         await message.answer(f"❌ Could not send warning: {e}")
+
+
+@dp.message(F.text.in_([
+    "📝 Confess", "👤 Profile", "❓ Help", "📜 Rules", 
+    "🔒 Privacy", "💬 End Chat", "❌ Cancel", 
+    "👑 Admin Panel", "📊 Stats"
+]))
+async def handle_menu_buttons(message: types.Message, state: FSMContext):
+    button_text = message.text
+    
+    if button_text == "📝 Confess":
+        await start_confession(message, state)
+    
+    elif button_text == "👤 Profile":
+        await user_profile(message)
+    
+    elif button_text == "❓ Help":
+        await help_command(message)
+    
+    elif button_text == "📜 Rules":
+        await rules_command(message)
+    
+    elif button_text == "🔒 Privacy":
+        await privacy_command(message)
+    
+    elif button_text == "💬 End Chat":
+        await end_chat_command(message, state)
+    
+    elif button_text == "❌ Cancel":
+        await cancel_command(message, state)
+    
+    elif button_text == "👑 Admin Panel" and await is_admin(message.from_user.id):
+        await admin_panel(message)
+    
+    elif button_text == "📊 Stats" and await is_admin(message.from_user.id):
+        await show_stats(message)
+
+
+@dp.message(Command("menu"))
+async def show_menu(message: types.Message):
+    """Show the menu keyboard"""
+    user_id = message.from_user.id
+    is_admin_user = await is_admin(user_id)
+    await message.answer(
+        "📋 Here's your menu:",
+        reply_markup=get_main_menu_keyboard(is_admin_user)
+    )
 
 
 
