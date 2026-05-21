@@ -1431,8 +1431,7 @@ async def show_top_aura(message: types.Message):
             response_text += f"{prefix}<b>{html.quote(user['profile_name'])}</b> "
             response_text += f"🏅 {user['points']} points"
             
-            # Add user ID for admin reference
-            response_text += f"\n   <code>{user['user_id']}</code>"
+
             
             # Add clickable profile link
             response_text += f" | <a href='{profile_link}'>View Profile</a>\n\n"
