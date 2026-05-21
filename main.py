@@ -1428,7 +1428,7 @@ async def show_top_aura(message: types.Message):
             # Generate profile link
             profile_link = await get_encoded_profile_link(user['user_id'])
             
-            response_text += f"{prefix}<b>{html.quote(user['profile_name'])}</b> \n "
+            response_text += f"{prefix}<b>{html.quote(user['profile_name'])}</b>"
             response_text += f"🏅 {user['points']} points \n "
             
 
