@@ -1449,11 +1449,7 @@ async def show_top_aura(message: types.Message):
             WHERE points > 0
         """)
         
-        if total_users and total_users['count']:
-            response_text += f"\n📊 <b>Statistics:</b>\n"
-            response_text += f"• Users with aura: {total_users['count']}\n"
-            if total_points and total_points['total']:
-                response_text += f"• Total aura points distributed: {total_points['total']}"
+
         
         # Send response with inline keyboard for refresh
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
