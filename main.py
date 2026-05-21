@@ -1372,6 +1372,141 @@ async def user_profile(message: types.Message):
     
     await message.answer(profile_text, reply_markup=keyboard)
 
+
+@dp.message(Command("top"))
+async def show_top_aura(message: types.Message):
+    """Show top 10 users with highest aura points"""
+    if not await is_admin(message.from_user.id):
+        await message.answer("This command is for admins only.")
+        return
+    
+    # Parse optional limit parameter (e.g., /top 20)
+    parts = message.text.split()
+    limit = 10  # Default to top 10
+    
+    if len(parts) > 1:
+        try:
+            limit = min(int(parts[1]), 50)  # Cap at 50 to avoid excessive data
+        except ValueError:
+            await message.answer("❌ Invalid number. Usage: /top [number] (max 50)")
+            return
+    
+    # Get top aura holders
+    top_users = await execute_query("""
+        SELECT 
+            u.user_id,
+            COALESCE(us.profile_name, 'Anonymous') as profile_name,
+            COALESCE(up.points, 0) as points
+        FROM user_points up
+        INNER JOIN user_status us ON up.user_id = us.user_id
+        WHERE up.points > 0 AND us.has_accepted_rules = TRUE AND us.is_blocked = FALSE
+        ORDER BY up.points DESC
+        LIMIT $1
+    """, limit)
+    
+    if not top_users:
+        await message.answer("📊 No users with aura points found yet.")
+        return
+    
+    # Build response
+    response_text = f"🏆 <b>Top {len(top_users)} Aura Holders</b>\n\n"
+    
+    # Add medals for top 3
+    medals = ["🥇", "🥈", "🥉"]
+    
+    for idx, user in enumerate(top_users, 1):
+        # Add medal emoji for top 3, otherwise just number
+        if idx <= 3:
+            prefix = f"{medals[idx-1]} "
+        else:
+            prefix = f"{idx}. "
+        
+        # Generate profile link
+        profile_link = await get_encoded_profile_link(user['user_id'])
+        
+        response_text += f"{prefix}<b>{html.quote(user['profile_name'])}</b> "
+        response_text += f"🏅 {user['points']} points"
+        
+        # Add user ID for admin reference
+        response_text += f"\n   <code>{user['user_id']}</code>"
+        
+        # Add clickable profile link
+        response_text += f" | <a href='{profile_link}'>Profile</a>\n\n"
+    
+    # Add pagination for larger lists (if more than 10)
+    if limit > 10 and len(top_users) == limit:
+        response_text += f"\n<i>Showing top {limit} users</i>"
+    
+    # Add stats
+    total_users = await fetch_one("""
+        SELECT COUNT(DISTINCT user_id) as count 
+        FROM user_points 
+        WHERE points > 0
+    """)
+    
+    if total_users and total_users['count']:
+        response_text += f"\n📊 <i>Total users with aura: {total_users['count']}</i>"
+    
+    # Send response with inline keyboard for refresh
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"refresh_top_{limit}")],
+        [InlineKeyboardButton(text="📊 View Stats", callback_data="stats")]
+    ])
+    
+    await message.answer(response_text, reply_markup=keyboard, disable_web_page_preview=True)
+
+@dp.callback_query(F.data.startswith("refresh_top_"))
+async def refresh_top_aura(callback_query: types.CallbackQuery):
+    """Refresh the top aura list"""
+    if not await is_admin(callback_query.from_user.id):
+        await callback_query.answer("Unauthorized.", show_alert=True)
+        return
+    
+    limit = int(callback_query.data.split("_")[-1])
+    
+    # Re-fetch top users
+    top_users = await execute_query("""
+        SELECT 
+            u.user_id,
+            COALESCE(us.profile_name, 'Anonymous') as profile_name,
+            COALESCE(up.points, 0) as points
+        FROM user_points up
+        INNER JOIN user_status us ON up.user_id = us.user_id
+        WHERE up.points > 0 AND us.has_accepted_rules = TRUE AND us.is_blocked = FALSE
+        ORDER BY up.points DESC
+        LIMIT $1
+    """, limit)
+    
+    if not top_users:
+        await callback_query.message.edit_text("📊 No users with aura points found yet.")
+        await callback_query.answer()
+        return
+    
+    response_text = f"🏆 <b>Top {len(top_users)} Aura Holders (Updated)</b>\n\n"
+    medals = ["🥇", "🥈", "🥉"]
+    
+    for idx, user in enumerate(top_users, 1):
+        if idx <= 3:
+            prefix = f"{medals[idx-1]} "
+        else:
+            prefix = f"{idx}. "
+        
+        profile_link = await get_encoded_profile_link(user['user_id'])
+        
+        response_text += f"{prefix}<b>{html.quote(user['profile_name'])}</b> "
+        response_text += f"🏅 {user['points']} points"
+        response_text += f"\n   <code>{user['user_id']}</code>"
+        response_text += f" | <a href='{profile_link}'>Profile</a>\n\n"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"refresh_top_{limit}")],
+        [InlineKeyboardButton(text="📊 View Stats", callback_data="stats")]
+    ])
+    
+    await callback_query.message.edit_text(response_text, reply_markup=keyboard, disable_web_page_preview=True)
+    await callback_query.answer("List refreshed!")
+
+
 @dp.callback_query(F.data == "profile_main")
 async def back_to_profile(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
@@ -3816,6 +3951,7 @@ async def set_bot_commands():
     admin_commands = user_commands + [
         types.BotCommand(command="admin", description="Admin panel"),
         types.BotCommand(command="stats", description="Statistics"),
+        types.BotCommand(command="top", description="Top aura holders"),
         types.BotCommand(command="id", description="Get user info"),
         types.BotCommand(command="warn", description="Warn user"),
         types.BotCommand(command="block", description="Block user"),
