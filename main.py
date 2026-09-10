@@ -3041,6 +3041,29 @@ async def process_comment(message: types.Message, state: FSMContext, text: Optio
     finally:
         await state.clear()
 
+
+@dp.callback_query(F.data.startswith("comments_page_"))
+async def handle_comments_page(callback_query: types.CallbackQuery):
+    """Handle pagination for comments (Prev/Next buttons)"""
+    try:
+        parts = callback_query.data.split("_")
+        # comments_page_{confession_id}_{page}
+        confession_id = int(parts[2])
+        page = int(parts[3])
+    except (IndexError, ValueError):
+        await callback_query.answer("Invalid page request.", show_alert=True)
+        return
+
+    user_id = callback_query.from_user.id
+
+    conf_data = await fetch_one("SELECT status FROM confessions WHERE id = $1", confession_id)
+    if not conf_data or conf_data['status'] != 'approved':
+        await callback_query.answer("This confession is not available.", show_alert=True)
+        return
+
+    await callback_query.answer("Loading...")
+    await show_comments_for_confession(user_id, confession_id, page=page)
+
 @dp.callback_query(F.data.startswith("react_like_"))
 async def react_like(callback_query: types.CallbackQuery):
     await handle_reaction(callback_query, "like")
