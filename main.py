@@ -1249,7 +1249,14 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
             f"Use the buttons below to navigate 👇"
         )
         is_admin_user = await is_admin(user_id)
+        if is_admin_user:
+            welcome_text = welcome_text.replace(
+                "Use the buttons below to navigate 👇",
+                "<b>Admin Commands:</b>\n⚙️ /admin - Admin panel\n🆔 /id - Get user info\n⚠️ /warn - Warn a user\n🚫 /block - Block user\n✅ /unblock - Unblock user\n📈 /stats - Bot statistics\n📢 /broadcast - Broadcast message\n\nUse the buttons below to navigate 👇"
+            )
+        
         await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(is_admin_user))
+
 
 @dp.callback_query(F.data == "accept_rules")
 async def handle_accept_rules(callback_query: types.CallbackQuery):
@@ -1260,7 +1267,9 @@ async def handle_accept_rules(callback_query: types.CallbackQuery):
         user_id
     )
     
-    await callback_query.message.edit_text(
+    is_admin_user = await is_admin(user_id)
+    
+    welcome_msg = (
         "✅ <b>Rules Accepted!</b>\n\n"
         "Welcome to the confession bot!\n\n"
         "<b>Available Commands:</b>\n"
@@ -1271,7 +1280,15 @@ async def handle_accept_rules(callback_query: types.CallbackQuery):
         "🛡️ /privacy - View privacy information\n"
         "✖️ /cancel - Cancel current action\n"
         "🚪 /endchat - End current chat\n\n"
-        "Use the buttons below to get started 👇",
+    )
+    
+    if is_admin_user:
+        welcome_msg += "<b>Admin Commands:</b>\n⚙️ /admin - Admin panel\n🆔 /id - Get user info\n⚠️ /warn - Warn a user\n🚫 /block - Block user\n✅ /unblock - Unblock user\n📈 /stats - Bot statistics\n📢 /broadcast - Broadcast message\n\n"
+        
+    welcome_msg += "Use the buttons below to get started 👇"
+    
+    await callback_query.message.edit_text(
+        welcome_msg,
         reply_markup=None
     )
     
@@ -1320,7 +1337,7 @@ async def help_command(message: types.Message):
     )
     
     if await is_admin(message.from_user.id):
-        help_text += "\n\n<b>Admin Commands:</b>\n/admin - Admin panel\n/id - Get user info\n/warn - Warn a user\n/block - Block user\n/unblock - Unblock user\n/stats - Bot statistics\n/broadcast - Broadcast message"
+        help_text += "\n\n<b>Admin Commands:</b>\n⚙️ /admin - Admin panel\n🆔 /id - Get user info\n⚠️ /warn - Warn a user\n🚫 /block - Block user\n✅ /unblock - Unblock user\n📈 /stats - Bot statistics\n📢 /broadcast - Broadcast message"
     
     # Show menu keyboard instead of removing it
     is_admin_user = await is_admin(message.from_user.id)
