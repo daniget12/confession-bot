@@ -732,7 +732,7 @@ async def build_comment_keyboard(comment_id: int, commenter_user_id: int, viewer
         builder.button(text=f"👍 {likes}", callback_data="noop")
         builder.button(text=f"👎 {dislikes}", callback_data="noop")
     
-    builder.button(text="↩️ Reply", callback_data=f"reply_{comment_id}")
+    builder.button(text="↪️ Reply", callback_data=f"reply_{comment_id}")
     
     # REMOVED: Report button and Contact Request button
     # Now just 3 buttons in one row
@@ -791,11 +791,7 @@ async def update_channel_post_button(confession_id: int):
     
     ch_msg_id = conf_data['message_id']
     link = f"https://t.me/{bot_info.username}?start=view_{confession_id}"
-    add_link = f"https://t.me/{bot_info.username}?start=add_{confession_id}"
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📝 Write Comment", url=add_link)],
-        [InlineKeyboardButton(text=f"💬 Browse ({count})", url=link)]
-    ])
+    markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"💬 View / Add Comments ({count})", url=link)]])
     
     try:
         await bot.edit_message_reply_markup(chat_id=CHANNEL_ID, message_id=ch_msg_id, reply_markup=markup)
@@ -839,7 +835,7 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
             await message_to_edit.edit_text(msg_text, reply_markup=None)
         else:
             await safe_send_message(user_id, msg_text)
-        nav = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📝 Write Comment", callback_data=f"add_{confession_id}")]])
+        nav = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="➕ Add Comment", callback_data=f"add_{confession_id}")]])
         await safe_send_message(user_id, "You can add your own comment below:", reply_markup=nav)
         return
     
@@ -910,7 +906,7 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
     if page < total_pages:
         nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"comments_page_{confession_id}_{page+1}"))
     
-    nav_keyboard = InlineKeyboardMarkup(inline_keyboard=[nav_row, [InlineKeyboardButton(text="📝 Write Comment", callback_data=f"add_{confession_id}")]])
+    nav_keyboard = InlineKeyboardMarkup(inline_keyboard=[nav_row, [InlineKeyboardButton(text="➕ Add Comment", callback_data=f"add_{confession_id}")]])
     end_txt = f"--- Showing comments {offset+1} to {min(offset+PAGE_SIZE, total_count)} of {total_count} for Confession #{confession_id} ---"
     await safe_send_message(user_id, end_txt, reply_markup=nav_keyboard)
 
@@ -962,7 +958,7 @@ async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, co
         builder.button(text=f"👍 {likes}", callback_data="noop")
         builder.button(text=f"👎 {dislikes}", callback_data="noop")
     
-    builder.button(text="↩️ Reply", callback_data=f"reply_{db_id}")
+    builder.button(text="↪️ Reply", callback_data=f"reply_{db_id}")
     builder.adjust(3)
     keyboard = builder.as_markup()
     
@@ -1119,14 +1115,14 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                 if conf_data['photo_file_id']:
                     caption = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
                     builder = InlineKeyboardBuilder()
-                    builder.button(text="📝 Write Comment", callback_data=f"add_{conf_id}")
+                    builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
                     builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
                     builder.adjust(1, 1)
                     await bot.send_photo(chat_id=user_id, photo=conf_data['photo_file_id'], caption=caption, reply_markup=builder.as_markup())
                 else:
                     txt = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
                     builder = InlineKeyboardBuilder()
-                    builder.button(text="📝 Write Comment", callback_data=f"add_{conf_id}")
+                    builder.button(text="➕ Add Comment", callback_data=f"add_{conf_id}")
                     builder.button(text=f"💬 Browse Comments ({comm_count})", callback_data=f"browse_{conf_id}")
                     builder.adjust(1, 1)
                     await message.answer(txt, reply_markup=builder.as_markup())  # ← FIXED: removed extra spaces
@@ -1134,24 +1130,6 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                 await message.answer("Invalid link.")
             except Exception as e:
                 logger.error(f"Error handling deep link '{deep_link_args}': {e}")
-                await message.answer("Error processing link.")
-                
-        elif deep_link_args.startswith("add_"):
-            try:
-                conf_id = int(deep_link_args.split("_", 1)[1])
-                conf_data = await fetch_one("SELECT status FROM confessions WHERE id = $1", conf_id)
-                
-                if not conf_data or conf_data['status'] != 'approved':
-                    await message.answer("This confession is not available for comments.")
-                else:
-                    await state.update_data(confession_id=conf_id, parent_comment_id=None)
-                    await state.set_state(CommentForm.waiting_for_comment)
-                    nav = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_comment")]])
-                    await message.answer(f"Please type your comment for Confession #{conf_id} (or send a sticker/GIF):\n\n<i>Note: You remain anonymous unless you mention your name.</i>", reply_markup=nav)
-            except (ValueError, IndexError):
-                await message.answer("Invalid link.")
-            except Exception as e:
-                logger.error(f"Error handling add deep link '{deep_link_args}': {e}")
                 await message.answer("Error processing link.")
                 
         elif deep_link_args.startswith("profile_"):
@@ -2751,29 +2729,26 @@ async def handle_approve_confession(callback_query: types.CallbackQuery, state: 
     
     try:
         link = f"https://t.me/{bot_info.username}?start=view_{conf['id']}"
-        add_link = f"https://t.me/{bot_info.username}?start=add_{conf['id']}"
         categories = conf['categories'] or []
         category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories])
-        
-        channel_kbd = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📝 Write Comment", url=add_link)],
-            [InlineKeyboardButton(text="💬 Browse (0)", url=link)]
-        ])
-
         if conf['video_file_id']:
             channel_caption = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
+            channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
             msg = await bot.send_video(chat_id=CHANNEL_ID, video=conf['video_file_id'], caption=channel_caption, reply_markup=channel_kbd,duration=conf.get('duration_seconds'))
 
         elif conf['audio_file_id']:
             channel_caption = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
+            channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
             msg = await bot.send_audio(chat_id=CHANNEL_ID, audio=conf['audio_file_id'], caption=channel_caption, reply_markup=channel_kbd, duration=conf.get('duration_seconds'))
 
         
         elif conf['photo_file_id']:
             channel_caption = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
+            channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
             msg = await bot.send_photo(chat_id=CHANNEL_ID, photo=conf['photo_file_id'], caption=channel_caption, reply_markup=channel_kbd)
         else:
             channel_post_text = f"<b>Confession #{conf['id']}</b>\n\n{html.quote(conf['text'])}\n\n{category_tags}"
+            channel_kbd = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 View / Add Comments (0)", url=link)]])
             msg = await bot.send_message(CHANNEL_ID, channel_post_text, reply_markup=channel_kbd)
         
         await execute_update("UPDATE confessions SET status = 'approved', message_id = $1 WHERE id = $2", msg.message_id, conf_id)
@@ -2935,7 +2910,7 @@ async def browse_comments(callback_query: types.CallbackQuery):
         if comment_count == 0:
             await callback_query.answer("No comments yet", show_alert=True)
             nav = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📝 Write Comment", callback_data=f"add_{conf_id}")]
+                [InlineKeyboardButton(text="➕ Add Comment", callback_data=f"add_{conf_id}")]
             ])
             await safe_send_message(user_id, "No comments yet. Be the first to add one!", reply_markup=nav)
             return
@@ -2987,7 +2962,7 @@ async def reply_comment_start(callback_query: types.CallbackQuery, state: FSMCon
     await state.set_state(CommentForm.waiting_for_comment)
     
     await callback_query.message.answer(
-        "↩️ <b>Reply to Comment</b>\n\nSend your reply text, sticker, or GIF.\nType /cancel to abort."
+        "↪️ <b>Reply to Comment</b>\n\nSend your reply text, sticker, or GIF.\nType /cancel to abort."
     )
     await callback_query.answer()
 
@@ -3042,7 +3017,7 @@ async def process_comment(message: types.Message, state: FSMContext, text: Optio
                 parent_owner_id = parent_comment['user_id']
                 conf_link = f"https://t.me/{bot_info.username}?start=view_{confession_id}"
                 notification = (
-                    f"↩️ <b>Someone replied to your comment!</b>\n\n"
+                    f"↪️ <b>Someone replied to your comment!</b>\n\n"
                     f"<b>{replier_name}</b> replied to your comment on <a href='{conf_link}'>Confession #{confession_id}</a>.\n\n"
                     f"Check it out!"
                 )
