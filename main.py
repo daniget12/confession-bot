@@ -697,7 +697,7 @@ def create_category_keyboard(selected_categories: List[str] = None):
          builder.row(InlineKeyboardButton(text=f"➡️ Done Selecting ({len(selected_categories)}/{MAX_CATEGORIES})", callback_data="category_done"))
     elif len(selected_categories) > MAX_CATEGORIES:
          builder.row(InlineKeyboardButton(text=f"⚠️ Too Many ({len(selected_categories)}/{MAX_CATEGORIES}) - Click to Confirm", callback_data="category_done"))
-    builder.row(InlineKeyboardButton(text="❌ Cancel Selection", callback_data="category_cancel"))
+    builder.row(InlineKeyboardButton(text="✖️ Cancel Selection", callback_data="category_cancel"))
     return builder.as_markup()
 
 async def get_comment_reactions(comment_id: int) -> Tuple[int, int]:
@@ -1045,17 +1045,17 @@ def create_profile_pagination_keyboard(base_callback: str, current_page: int, to
         row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"{base_callback}_{current_page + 1}"))
     if row:
         builder.row(*row)
-    builder.row(InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_main"))
+    builder.row(InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main"))
     return builder.as_markup()
 def get_main_menu_keyboard(is_admin: bool = False):
     """Create the main menu keyboard that appears above the text input"""
     
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📝 Confess"), KeyboardButton(text="👤 Profile")],
-            [KeyboardButton(text="❓ Help"), KeyboardButton(text="📜 Rules")],
-            [KeyboardButton(text="🔒 Privacy"), KeyboardButton(text="💬 End Chat")],
-            [KeyboardButton(text="❌ Cancel")],
+            [KeyboardButton(text="🕊️ Confess"), KeyboardButton(text="✨ Profile")],
+            [KeyboardButton(text="💡 Help"), KeyboardButton(text="⚖️ Rules")],
+            [KeyboardButton(text="🛡️ Privacy"), KeyboardButton(text="🚪 End Chat")],
+            [KeyboardButton(text="✖️ Cancel")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
@@ -1064,8 +1064,8 @@ def get_main_menu_keyboard(is_admin: bool = False):
     
     if is_admin:
         keyboard.keyboard.append([
-            KeyboardButton(text="👑 Admin Panel"),
-            KeyboardButton(text="📊 Stats")
+            KeyboardButton(text="⚙️ Admin Panel"),
+            KeyboardButton(text="📈 Stats")
         ])
     
     return keyboard
@@ -1147,7 +1147,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                 await state.update_data(confession_id=conf_id, parent_comment_id=None)
                 await state.set_state(CommentForm.waiting_for_comment)
                 cancel_kbd = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_comment")]
+                    [InlineKeyboardButton(text="✖️ Cancel", callback_data="cancel_comment")]
                 ])
                 await message.answer(
                     f"✏️ <b>Write a comment for Confession #{conf_id}</b>\n\n"
@@ -1201,13 +1201,13 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                 
                 profile_text = f"👤 <b>User Profile</b>\n\n"
                 profile_text += f"📛 <b>Display Name:</b> {profile_name}\n"
-                profile_text += f"🏅 <b>Aura Points:</b> {points}\n\n"
+                profile_text += f"⭐ <b>Aura Points:</b> {points}\n\n"
                 
                 keyboard = InlineKeyboardBuilder()
                 
                 if existing_chat:
                     profile_text += "<i>You have an active chat with this user.</i>"
-                    keyboard.button(text="💬 Go to Chat", callback_data=f"view_chat_{existing_chat['id']}")
+                    keyboard.button(text="➜ Go to Chat", callback_data=f"view_chat_{existing_chat['id']}")
                 elif pending_req:
                     profile_text += "<i>You have a pending contact request with this user.</i>"
                     keyboard.button(text="⏳ Request Pending", callback_data="noop")
@@ -1222,7 +1222,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                 if user_id != target_user_id:
                     keyboard.button(text="⚠️ Report User", callback_data=f"report_user_{target_user_id}")
                 
-                keyboard.button(text="⬅️ Back", callback_data="noop")
+                keyboard.button(text="↩ Back", callback_data="noop")
                 keyboard.adjust(1)
                 
                 await message.answer(profile_text, reply_markup=keyboard.as_markup())
@@ -1386,17 +1386,17 @@ async def user_profile(message: types.Message):
     points = await get_user_points(user_id)
     profile_name = await get_profile_name(user_id)
     
-    profile_text = f"👤 <b>Your Profile</b>\n\n"
-    profile_text += f"🏅 <b>Aura Points:</b> {points}\n"
-    profile_text += f"👁️ <b>Display Name:</b> {profile_name}\n\n"
+    profile_text = f"✨ <b>Your Profile</b>\n\n"
+    profile_text += f"⭐ <b>Aura Points:</b> {points}\n"
+    profile_text += f"🏷️ <b>Display Name:</b> {profile_name}\n\n"
     profile_text += "<b>What would you like to do?</b>"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Change Display Name", callback_data="change_profile_name")],
-        [InlineKeyboardButton(text="📜 My Confessions", callback_data="profile_confessions_1")],
-        [InlineKeyboardButton(text="💬 My Comments", callback_data="profile_comments_1")],
-        [InlineKeyboardButton(text="💬 My Active Chats", callback_data="my_active_chats")],
-        [InlineKeyboardButton(text="📨 Pending Contact Requests", callback_data="pending_contact_requests")]
+        [InlineKeyboardButton(text="🏷️ Change Display Name", callback_data="change_profile_name")],
+        [InlineKeyboardButton(text="🕊️ My Confessions", callback_data="profile_confessions_1")],
+        [InlineKeyboardButton(text="💭 My Comments", callback_data="profile_comments_1")],
+        [InlineKeyboardButton(text="🗨️ My Active Chats", callback_data="my_active_chats")],
+        [InlineKeyboardButton(text="📬 Pending Contact Requests", callback_data="pending_contact_requests")]
     ])
     
     await message.answer(profile_text, reply_markup=keyboard)
@@ -1483,7 +1483,7 @@ async def show_top_aura(message: types.Message):
         # Send response with inline keyboard for refresh
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"refresh_top_{limit}")],
-            [InlineKeyboardButton(text="📊 View Full Stats", callback_data="stats")]
+            [InlineKeyboardButton(text="📈 View Full Stats", callback_data="stats")]
         ])
         
         await message.answer(response_text, reply_markup=keyboard, disable_web_page_preview=True)
@@ -1551,7 +1551,7 @@ async def refresh_top_aura(callback_query: types.CallbackQuery):
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"refresh_top_{limit}")],
-        [InlineKeyboardButton(text="📊 View Stats", callback_data="stats")]
+        [InlineKeyboardButton(text="📈 View Stats", callback_data="stats")]
     ])
     
     await callback_query.message.edit_text(response_text, reply_markup=keyboard, disable_web_page_preview=True)
@@ -1564,17 +1564,17 @@ async def back_to_profile(callback_query: types.CallbackQuery):
     points = await get_user_points(user_id)
     profile_name = await get_profile_name(user_id)
     
-    profile_text = f"👤 <b>Your Profile</b>\n\n"
-    profile_text += f"🏅 <b>Aura Points:</b> {points}\n"
-    profile_text += f"👁️ <b>Display Name:</b> {profile_name}\n\n"
+    profile_text = f"✨ <b>Your Profile</b>\n\n"
+    profile_text += f"⭐ <b>Aura Points:</b> {points}\n"
+    profile_text += f"🏷️ <b>Display Name:</b> {profile_name}\n\n"
     profile_text += "<b>What would you like to do?</b>"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Change Display Name", callback_data="change_profile_name")],
-        [InlineKeyboardButton(text="📜 My Confessions", callback_data="profile_confessions_1")],
-        [InlineKeyboardButton(text="💬 My Comments", callback_data="profile_comments_1")],
-        [InlineKeyboardButton(text="💬 My Active Chats", callback_data="my_active_chats")],
-        [InlineKeyboardButton(text="📨 Pending Contact Requests", callback_data="pending_contact_requests")]
+        [InlineKeyboardButton(text="🏷️ Change Display Name", callback_data="change_profile_name")],
+        [InlineKeyboardButton(text="🕊️ My Confessions", callback_data="profile_confessions_1")],
+        [InlineKeyboardButton(text="💭 My Comments", callback_data="profile_comments_1")],
+        [InlineKeyboardButton(text="🗨️ My Active Chats", callback_data="my_active_chats")],
+        [InlineKeyboardButton(text="📬 Pending Contact Requests", callback_data="pending_contact_requests")]
     ])
     
     await callback_query.message.edit_text(profile_text, reply_markup=keyboard)
@@ -1625,7 +1625,7 @@ async def show_user_confessions(callback_query: types.CallbackQuery):
         await callback_query.message.edit_text(
             "📭 <b>Your Confessions</b>\n\nYou haven't submitted any confessions yet.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_main")]
+                [InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main")]
             ])
         )
         await callback_query.answer()
@@ -1677,7 +1677,7 @@ async def show_user_comments(callback_query: types.CallbackQuery):
         await callback_query.message.edit_text(
             "💬 <b>Your Comments</b>\n\nYou haven't made any comments yet.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_main")]
+                [InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main")]
             ])
         )
         await callback_query.answer()
@@ -1793,7 +1793,7 @@ async def show_active_chats(callback_query: types.CallbackQuery):
         await callback_query.message.edit_text(
             "💬 <b>Your Active Chats</b>\n\nYou have no active chats.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_main")]
+                [InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main")]
             ])
         )
         await callback_query.answer()
@@ -1808,7 +1808,7 @@ async def show_active_chats(callback_query: types.CallbackQuery):
         response_text += f"👤 <b>{other_user_name}</b>\n   Last activity: {last_msg_time}\n\n"
         keyboard.button(text=f"💬 Chat with {other_user_name[:15]}", callback_data=f"view_chat_{chat['id']}")
     
-    keyboard.button(text="⬅️ Back to Profile", callback_data="profile_main")
+    keyboard.button(text="↩ Back to Profile", callback_data="profile_main")
     keyboard.adjust(1)
     
     await callback_query.message.edit_text(response_text, reply_markup=keyboard.as_markup())
@@ -1866,8 +1866,8 @@ async def view_chat_messages(callback_query: types.CallbackQuery, state: FSMCont
     response_text += "<i>Send a message below to continue. Type /endchat to disconnect.</i>"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚫 Disconnect Chat", callback_data=f"disconnect_chat_{chat_id}")],
-        [InlineKeyboardButton(text="⬅️ Back to Chats", callback_data="my_active_chats")]
+        [InlineKeyboardButton(text="⛓️‍💥 Disconnect Chat", callback_data=f"disconnect_chat_{chat_id}")],
+        [InlineKeyboardButton(text="↩ Back to Chats", callback_data="my_active_chats")]
     ])
     
     await callback_query.message.edit_text(response_text, reply_markup=keyboard)
@@ -1931,7 +1931,7 @@ async def handle_chat_message(message: types.Message, state: FSMContext):
                     other_user_id,
                     f"💬 <b>New message in chat:</b>\n\n{html.quote(message.text)}",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="💬 Go to Chat", callback_data=f"view_chat_{chat_id}")]
+                        [InlineKeyboardButton(text="➜ Go to Chat", callback_data=f"view_chat_{chat_id}")]
                     ])
                 )
             elif message.sticker:
@@ -1977,7 +1977,7 @@ async def disconnect_chat(callback_query: types.CallbackQuery, state: FSMContext
     await callback_query.message.edit_text(
         "✅ Chat disconnected.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_main")]
+            [InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main")]
         ])
     )
     await callback_query.answer()
@@ -1998,7 +1998,7 @@ async def show_pending_contact_requests(callback_query: types.CallbackQuery):
         await callback_query.message.edit_text(
             "📨 <b>Pending Contact Requests</b>\n\nYou have no pending contact requests.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_main")]
+                [InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main")]
             ])
         )
         await callback_query.answer()
@@ -2022,7 +2022,7 @@ async def show_pending_contact_requests(callback_query: types.CallbackQuery):
             InlineKeyboardButton(text=f"❌ Reject", callback_data=f"reject_contact_{req['id']}")
         )
     
-    keyboard.row(InlineKeyboardButton(text="⬅️ Back to Profile", callback_data="profile_main"))
+    keyboard.row(InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main"))
     
     await callback_query.message.edit_text(response_text, reply_markup=keyboard.as_markup())
     await callback_query.answer()
@@ -2070,13 +2070,13 @@ async def view_user_profile(callback_query: types.CallbackQuery):
     
     profile_text = f"👤 <b>User Profile</b>\n\n"
     profile_text += f"📛 <b>Display Name:</b> {profile_name}\n"
-    profile_text += f"🏅 <b>Aura Points:</b> {points}\n\n"
+    profile_text += f"⭐ <b>Aura Points:</b> {points}\n\n"
     
     keyboard = InlineKeyboardBuilder()
     
     if existing_chat:
         profile_text += "<i>You have an active chat with this user.</i>"
-        keyboard.button(text="💬 Go to Chat", callback_data=f"view_chat_{existing_chat['id']}")
+        keyboard.button(text="➜ Go to Chat", callback_data=f"view_chat_{existing_chat['id']}")
     elif pending_req:
         profile_text += "<i>You have a pending contact request with this user.</i>"
         keyboard.button(text="⏳ Request Pending", callback_data="noop")
@@ -2092,7 +2092,7 @@ async def view_user_profile(callback_query: types.CallbackQuery):
     if viewer_id != target_user_id:
         keyboard.button(text="⚠️ Report User", callback_data=f"report_user_{target_user_id}")
     
-    keyboard.button(text="⬅️ Back", callback_data="noop")
+    keyboard.button(text="↩ Back", callback_data="noop")
     keyboard.adjust(1)
     
     await callback_query.message.edit_text(profile_text, reply_markup=keyboard.as_markup())
@@ -2256,7 +2256,7 @@ async def start_chat_from_profile(callback_query: types.CallbackQuery, state: FS
                 f"💬 <b>New Chat Started</b>\n\n"
                 f"{await get_profile_name(user_id)} has started a chat with you!",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="💬 Go to Chat", callback_data=f"view_chat_{chat_id}")]
+                    [InlineKeyboardButton(text="➜ Go to Chat", callback_data=f"view_chat_{chat_id}")]
                 ])
             )
         except Exception as e:
@@ -2686,13 +2686,13 @@ async def handle_contact_response(callback_query: types.CallbackQuery):
                     f"<b>{responder_name}</b> has approved your contact request!\n\n"
                     f"You can now chat with them.",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="💬 Go to Chat", callback_data=f"view_chat_{chat_id}")]
+                        [InlineKeyboardButton(text="➜ Go to Chat", callback_data=f"view_chat_{chat_id}")]
                     ])
                 )
                 
                 # Send chat invitation to responder (the one who approved)
                 chat_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="💬 Go to Chat", callback_data=f"view_chat_{chat_id}")]
+                    [InlineKeyboardButton(text="➜ Go to Chat", callback_data=f"view_chat_{chat_id}")]
                 ])
                 
                 await safe_send_message(
@@ -3503,38 +3503,38 @@ async def warn_user(message: types.Message):
 
 
 @dp.message(F.text.in_([
-    "📝 Confess", "👤 Profile", "❓ Help", "📜 Rules", 
-    "🔒 Privacy", "💬 End Chat", "❌ Cancel", 
-    "👑 Admin Panel", "📊 Stats"
+    "🕊️ Confess", "✨ Profile", "💡 Help", "⚖️ Rules", 
+    "🛡️ Privacy", "🚪 End Chat", "✖️ Cancel", 
+    "⚙️ Admin Panel", "📈 Stats"
 ]))
 async def handle_menu_buttons(message: types.Message, state: FSMContext):
     button_text = message.text
     
-    if button_text == "📝 Confess":
+    if button_text == "🕊️ Confess":
         await start_confession(message, state)
     
-    elif button_text == "👤 Profile":
+    elif button_text == "✨ Profile":
         await user_profile(message)
     
-    elif button_text == "❓ Help":
+    elif button_text == "💡 Help":
         await help_command(message)
     
-    elif button_text == "📜 Rules":
+    elif button_text == "⚖️ Rules":
         await rules_command(message)
     
-    elif button_text == "🔒 Privacy":
+    elif button_text == "🛡️ Privacy":
         await privacy_command(message)
     
-    elif button_text == "💬 End Chat":
+    elif button_text == "🚪 End Chat":
         await end_chat_command(message, state)
     
-    elif button_text == "❌ Cancel":
+    elif button_text == "✖️ Cancel":
         await cancel_command(message, state)
     
-    elif button_text == "👑 Admin Panel" and await is_admin(message.from_user.id):
+    elif button_text == "⚙️ Admin Panel" and await is_admin(message.from_user.id):
         await admin_panel(message)
     
-    elif button_text == "📊 Stats" and await is_admin(message.from_user.id):
+    elif button_text == "📈 Stats" and await is_admin(message.from_user.id):
         await show_stats(message)
 
 
@@ -3612,7 +3612,7 @@ async def block_user_start(message: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="7 Days", callback_data="block_7d")],
         [InlineKeyboardButton(text="30 Days", callback_data="block_30d")],
         [InlineKeyboardButton(text="🔴 PERMANENT", callback_data="block_permanent")],
-        [InlineKeyboardButton(text="❌ Cancel", callback_data="block_cancel")]
+        [InlineKeyboardButton(text="✖️ Cancel", callback_data="block_cancel")]
     ])
     
     profile_name = user_status['profile_name'] or "Anonymous"
@@ -3891,7 +3891,7 @@ async def broadcast_command(message: types.Message, state: FSMContext):
     
     confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Yes, Broadcast", callback_data="confirm_broadcast"),
-         InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_broadcast")]
+         InlineKeyboardButton(text="✖️ Cancel", callback_data="cancel_broadcast")]
     ])
     
     await message.answer(
