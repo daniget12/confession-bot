@@ -1237,7 +1237,15 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
         
         welcome_text = (
             f"👋 Welcome back, <b>{profile_name}</b>!\n\n"
-            f"🏅 <b>Your Aura:</b> {points}\n\n"
+            f"⭐ <b>Your Aura:</b> {points}\n\n"
+            "<b>Available Commands:</b>\n"
+            "🕊️ /confess - Submit an anonymous confession\n"
+            "✨ /profile - View and manage your profile\n"
+            "💡 /help - See detailed help\n"
+            "⚖️ /rules - View the bot's rules\n"
+            "🛡️ /privacy - View privacy information\n"
+            "✖️ /cancel - Cancel current action\n"
+            "🚪 /endchat - End current chat\n\n"
             f"Use the buttons below to navigate 👇"
         )
         is_admin_user = await is_admin(user_id)
@@ -1255,6 +1263,14 @@ async def handle_accept_rules(callback_query: types.CallbackQuery):
     await callback_query.message.edit_text(
         "✅ <b>Rules Accepted!</b>\n\n"
         "Welcome to the confession bot!\n\n"
+        "<b>Available Commands:</b>\n"
+        "🕊️ /confess - Submit an anonymous confession\n"
+        "✨ /profile - View and manage your profile\n"
+        "💡 /help - See detailed help\n"
+        "⚖️ /rules - View the bot's rules\n"
+        "🛡️ /privacy - View privacy information\n"
+        "✖️ /cancel - Cancel current action\n"
+        "🚪 /endchat - End current chat\n\n"
         "Use the buttons below to get started 👇",
         reply_markup=None
     )
