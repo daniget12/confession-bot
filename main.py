@@ -727,13 +727,13 @@ async def build_comment_keyboard(comment_id: int, commenter_user_id: int, viewer
     
     # Only reactions and reply - NO profile, NO report, NO contact request
     if commenter_user_id != viewer_user_id:
-        builder.button(text=f"👍  {likes}", callback_data=f"react_like_{comment_id}")
-        builder.button(text=f"👎  {dislikes}", callback_data=f"react_dislike_{comment_id}")
+        builder.button(text=f"{likes}", icon_custom_emoji_id="5440384032451877242", callback_data=f"react_like_{comment_id}")
+        builder.button(text=f"{dislikes}", icon_custom_emoji_id="5380046837229039430", callback_data=f"react_dislike_{comment_id}")
     else:
-        builder.button(text=f"👍  {likes}", callback_data="noop")
-        builder.button(text=f"👎  {dislikes}", callback_data="noop")
+        builder.button(text=f"{likes}", icon_custom_emoji_id="5440384032451877242", callback_data="noop")
+        builder.button(text=f"{dislikes}", icon_custom_emoji_id="5380046837229039430", callback_data="noop")
     
-    builder.button(text="◀  Reply", callback_data=f"reply_{comment_id}")
+    builder.button(text="Reply", icon_custom_emoji_id="5258132936401624790", callback_data=f"reply_{comment_id}")
     
     # REMOVED: Report button and Contact Request button
     # Now just 3 buttons in one row
@@ -794,8 +794,8 @@ async def update_channel_post_button(confession_id: int):
     link = f"https://t.me/{bot_info.username}?start=view_{confession_id}"
     add_link = f"https://t.me/{bot_info.username}?start=addcomment_{confession_id}"
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"✏️  Write Comment", url=add_link)],
-        [InlineKeyboardButton(text=f"≡  Browse ({count})", url=link)]
+        [InlineKeyboardButton(text="Write Comment", icon_custom_emoji_id="5242667583802451480", url=add_link)],
+        [InlineKeyboardButton(text=f"Browse ({count})", icon_custom_emoji_id="5224450179368767019", url=link)]
     ])
     
     try:
@@ -840,7 +840,7 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
             await message_to_edit.edit_text(msg_text, reply_markup=None)
         else:
             await safe_send_message(user_id, msg_text)
-        nav = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✏️  Write Comment", callback_data=f"add_{confession_id}")]])
+        nav = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Write Comment", icon_custom_emoji_id="5242667583802451480", callback_data=f"add_{confession_id}")]])
         await safe_send_message(user_id, "You can add your own comment below:", reply_markup=nav)
         return
     
@@ -911,7 +911,7 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
     if page < total_pages:
         nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"comments_page_{confession_id}_{page+1}"))
     
-    nav_keyboard = InlineKeyboardMarkup(inline_keyboard=[nav_row, [InlineKeyboardButton(text="✏️  Write Comment", callback_data=f"add_{confession_id}")]])
+    nav_keyboard = InlineKeyboardMarkup(inline_keyboard=[nav_row, [InlineKeyboardButton(text="Write Comment", icon_custom_emoji_id="5242667583802451480", callback_data=f"add_{confession_id}")]])
     end_txt = f"--- Showing comments {offset+1} to {min(offset+PAGE_SIZE, total_count)} of {total_count} for Confession #{confession_id} ---"
     await safe_send_message(user_id, end_txt, reply_markup=nav_keyboard)
 
@@ -945,10 +945,10 @@ async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, co
     if is_author and commenter_uid == confession_owner_id:
         # For confession owner: show "👑 Author" as a clickable link without name
         # The link goes to their profile
-        display_name = f"<tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> <a href='{profile_link}'>Author</a> 🏅{points}{tag_str}"
+        display_name = f"<tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> <a href=\'{profile_link}\'>Author</a> <tg-emoji emoji-id=\"5280735858926822987\">🏅</tg-emoji>{points}{tag_str}"
     else:
         # For regular users: show their actual name with link
-        display_name = f"<tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> <a href='{profile_link}'>{profile_name}</a> 🏅{points}{tag_str}"
+        display_name = f"<tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> <a href=\'{profile_link}\'>{profile_name}</a> <tg-emoji emoji-id=\"5280735858926822987\">🏅</tg-emoji>{points}{tag_str}"
     
     admin_info = f" [UID: <code>{commenter_uid}</code>]" if is_admin_user else ""
     
@@ -957,13 +957,13 @@ async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, co
     builder = InlineKeyboardBuilder()
     
     if commenter_uid != user_id:
-        builder.button(text=f"👍  {likes}", callback_data=f"react_like_{db_id}")
-        builder.button(text=f"👎  {dislikes}", callback_data=f"react_dislike_{db_id}")
+        builder.button(text=f"{likes}", icon_custom_emoji_id="5440384032451877242", callback_data=f"react_like_{db_id}")
+        builder.button(text=f"{dislikes}", icon_custom_emoji_id="5380046837229039430", callback_data=f"react_dislike_{db_id}")
     else:
-        builder.button(text=f"👍  {likes}", callback_data="noop")
-        builder.button(text=f"👎  {dislikes}", callback_data="noop")
+        builder.button(text=f"{likes}", icon_custom_emoji_id="5440384032451877242", callback_data="noop")
+        builder.button(text=f"{dislikes}", icon_custom_emoji_id="5380046837229039430", callback_data="noop")
     
-    builder.button(text="◀  Reply", callback_data=f"reply_{db_id}")
+    builder.button(text="Reply", icon_custom_emoji_id="5258132936401624790", callback_data=f"reply_{db_id}")
     builder.adjust(3)
     keyboard = builder.as_markup()
     
@@ -1120,15 +1120,15 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                 if conf_data['photo_file_id']:
                     caption = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
                     builder = InlineKeyboardBuilder()
-                    builder.button(text="✏️  Write Comment", callback_data=f"add_{conf_id}")
-                    builder.button(text=f"≡  Browse ({comm_count})", callback_data=f"browse_{conf_id}")
+                    builder.button(text="Write Comment", icon_custom_emoji_id="5242667583802451480", callback_data=f"add_{conf_id}")
+                    builder.button(text=f"Browse ({comm_count})", icon_custom_emoji_id="5224450179368767019", callback_data=f"browse_{conf_id}")
                     builder.adjust(1, 1)
                     await bot.send_photo(chat_id=user_id, photo=conf_data['photo_file_id'], caption=caption, reply_markup=builder.as_markup())
                 else:
                     txt = f"<b>Confession #{conf_id}</b>\n\n{html.quote(conf_data['text'])}\n\n{category_tags}\n---"
                     builder = InlineKeyboardBuilder()
-                    builder.button(text="✏️  Write Comment", callback_data=f"add_{conf_id}")
-                    builder.button(text=f"≡  Browse ({comm_count})", callback_data=f"browse_{conf_id}")
+                    builder.button(text="Write Comment", icon_custom_emoji_id="5242667583802451480", callback_data=f"add_{conf_id}")
+                    builder.button(text=f"Browse ({comm_count})", icon_custom_emoji_id="5224450179368767019", callback_data=f"browse_{conf_id}")
                     builder.adjust(1, 1)
                     await message.answer(txt, reply_markup=builder.as_markup())  # ← FIXED: removed extra spaces
             except (ValueError, IndexError):
@@ -1238,7 +1238,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
         
         welcome_text = (
             f"👋 Welcome back, <tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> <b>{profile_name}</b>!\n\n"
-            f"⭐ <b>Your Aura:</b> {points}\n\n"
+            f"<tg-emoji emoji-id=\"5280735858926822987\">⭐</tg-emoji> <b>Your Aura:</b> {points}\n\n"
             "<b>Available Commands:</b>\n"
             "🕊️ /confess - Submit an anonymous confession\n"
             "✨ /profile - View and manage your profile\n"
@@ -1421,7 +1421,7 @@ async def user_profile(message: types.Message):
     profile_name = await get_profile_name(user_id)
     
     profile_text = f"✨ <b>Your Profile</b>\n\n"
-    profile_text += f"⭐ <b>Aura Points:</b> {points}\n"
+    profile_text += f"<tg-emoji emoji-id=\"5280735858926822987\">⭐</tg-emoji> <b>Aura Points:</b> {points}\n"
     profile_text += f"🏷️ <b>Display Name:</b> <tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> {html.quote(profile_name)}\n\n"
     profile_text += "<b>What would you like to do?</b>"
     
@@ -1599,8 +1599,8 @@ async def back_to_profile(callback_query: types.CallbackQuery):
     profile_name = await get_profile_name(user_id)
     
     profile_text = f"✨ <b>Your Profile</b>\n\n"
-    profile_text += f"⭐ <b>Aura Points:</b> {points}\n"
-    profile_text += f"🏷️ <b>Display Name:</b> {profile_name}\n\n"
+    profile_text += f"<tg-emoji emoji-id=\"5280735858926822987\">⭐</tg-emoji> <b>Aura Points:</b> {points}\n"
+    profile_text += f"🏷️ <b>Display Name:</b> <tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> {html.quote(profile_name)}\n\n"
     profile_text += "<b>What would you like to do?</b>"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -2876,8 +2876,8 @@ async def handle_approve_confession(callback_query: types.CallbackQuery, state: 
         category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories])
         
         channel_kbd = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✏️  Write Comment", url=add_link)],
-            [InlineKeyboardButton(text="≡  Browse (0)", url=link)]
+            [InlineKeyboardButton(text="Write Comment", icon_custom_emoji_id="5242667583802451480", url=add_link)],
+            [InlineKeyboardButton(text="Browse (0)", icon_custom_emoji_id="5224450179368767019", url=link)]
         ])
         
         if conf['video_file_id']:
@@ -3055,7 +3055,7 @@ async def browse_comments(callback_query: types.CallbackQuery):
         if comment_count == 0:
             await callback_query.answer("No comments yet", show_alert=True)
             nav = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✏️  Write Comment", callback_data=f"add_{conf_id}")]
+                [InlineKeyboardButton(text="Write Comment", icon_custom_emoji_id="5242667583802451480", callback_data=f"add_{conf_id}")]
             ])
             await safe_send_message(user_id, "No comments yet. Be the first to add one!", reply_markup=nav)
             return
