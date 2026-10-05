@@ -1053,10 +1053,10 @@ def get_main_menu_keyboard(is_admin: bool = False):
     
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="✏️ Confess"), KeyboardButton(text="👤 Profile")],
-            [KeyboardButton(text="ℹ️ Help"), KeyboardButton(text="📖 Rules")],
-            [KeyboardButton(text="🛡️ Privacy"), KeyboardButton(text="🚪 End Chat")],
-            [KeyboardButton(text="✖️ Cancel")],
+            [KeyboardButton(text="Confess", icon_custom_emoji_id="5395444784611480792"), KeyboardButton(text="👤 Profile")],
+            [KeyboardButton(text="Help", icon_custom_emoji_id="5409181322679706928"), KeyboardButton(text="Rules", icon_custom_emoji_id="6028090581094240774")],
+            [KeyboardButton(text="Privacy", icon_custom_emoji_id="5258476306152038031"), KeyboardButton(text="End Chat", icon_custom_emoji_id="5956275721428012889")],
+            [KeyboardButton(text="Cancel", icon_custom_emoji_id="5280803324273115630")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
@@ -1065,8 +1065,8 @@ def get_main_menu_keyboard(is_admin: bool = False):
     
     if is_admin:
         keyboard.keyboard.append([
-            KeyboardButton(text="⚙️ Admin Panel"),
-            KeyboardButton(text="📊 Stats")
+            KeyboardButton(text="Admin Panel", icon_custom_emoji_id="6129805886383723340"),
+            KeyboardButton(text="Stats", icon_custom_emoji_id="5431577498364158238")
         ])
     
     return keyboard
@@ -3616,38 +3616,38 @@ async def warn_user(message: types.Message):
 
 
 @dp.message(F.text.in_([
-    "✏️ Confess", "👤 Profile", "ℹ️ Help", "📖 Rules", 
-    "🛡️ Privacy", "🚪 End Chat", "✖️ Cancel", 
-    "⚙️ Admin Panel", "📊 Stats"
+    "Confess", "👤 Profile", "Help", "Rules", 
+    "Privacy", "End Chat", "Cancel", 
+    "Admin Panel", "Stats"
 ]))
 async def handle_menu_buttons(message: types.Message, state: FSMContext):
     button_text = message.text
     
-    if button_text == "✏️ Confess":
+    if button_text == "Confess":
         await start_confession(message, state)
     
     elif button_text == "👤 Profile":
         await user_profile(message)
     
-    elif button_text == "ℹ️ Help":
+    elif button_text == "Help":
         await help_command(message)
     
-    elif button_text == "📖 Rules":
+    elif button_text == "Rules":
         await rules_command(message)
     
-    elif button_text == "🛡️ Privacy":
+    elif button_text == "Privacy":
         await privacy_command(message)
     
-    elif button_text == "🚪 End Chat":
+    elif button_text == "End Chat":
         await end_chat_command(message, state)
     
-    elif button_text == "✖️ Cancel":
+    elif button_text == "Cancel":
         await cancel_command(message, state)
     
-    elif button_text == "⚙️ Admin Panel" and await is_admin(message.from_user.id):
+    elif button_text == "Admin Panel" and await is_admin(message.from_user.id):
         await admin_panel(message)
     
-    elif button_text == "📊 Stats" and await is_admin(message.from_user.id):
+    elif button_text == "Stats" and await is_admin(message.from_user.id):
         await show_stats(message)
 
 
