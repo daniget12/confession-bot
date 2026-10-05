@@ -111,6 +111,7 @@ class ConfessionForm(StatesGroup):
     selecting_categories = State()
     waiting_for_text = State()
     waiting_for_voice_choice = State()
+    waiting_for_confirmation = State()
 
 class CommentForm(StatesGroup):
     waiting_for_comment = State()
@@ -2371,6 +2372,85 @@ async def handle_category_selection(callback_query: types.CallbackQuery, state: 
         await callback_query.message.edit_reply_markup(reply_markup=create_category_keyboard(selected_categories))
         await callback_query.answer(f"'{category}' {'selected' if category in selected_categories else 'deselected'}.")
 
+async def request_confession_preview(message: types.Message, state: FSMContext, text: str, photo_file_id=None, video_file_id=None, audio_file_id=None, duration=None, media_type=None, is_anon=False):
+    if len(text) < 10:
+        await message.answer("⚠️ Confession too short (minimum 10 characters).")
+        return
+    if len(text) > 3900:
+        await message.answer("⚠️ Confession too long (maximum 3900 characters).")
+        return
+        
+    await state.update_data(
+        preview_text=text,
+        preview_photo=photo_file_id,
+        preview_video=video_file_id,
+        preview_audio=audio_file_id,
+        preview_duration=duration,
+        preview_media_type=media_type,
+        preview_is_anon=is_anon
+    )
+    
+    state_data = await state.get_data()
+    selected_categories = state_data.get("selected_categories", [])
+    if not selected_categories:
+        await message.answer("⚠️ Error: Category info lost. Please start again with /confess.")
+        await state.clear()
+        return
+        
+    category_tags = " ".join([f"#{html.quote(cat)}" for cat in selected_categories])
+    preview_msg = f"👀 <b>Confession Preview</b>\n<b>Categories:</b> {category_tags}\n\n<b>Caption/Text:</b>\n{html.quote(text)}"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Send Confession", callback_data="confirm_confession")],
+        [InlineKeyboardButton(text="✖️ Cancel", callback_data="cancel_confession")]
+    ])
+    
+    if photo_file_id:
+        await message.answer_photo(photo=photo_file_id, caption=preview_msg, reply_markup=keyboard)
+    elif video_file_id:
+        await message.answer_video(video=video_file_id, caption=preview_msg, reply_markup=keyboard)
+    elif audio_file_id:
+        if media_type == "voice" and is_anon:
+            preview_msg += "\n\n<i>(Your voice will be anonymized upon submission)</i>"
+        if media_type == "voice":
+            await message.answer_voice(voice=audio_file_id, caption=preview_msg, reply_markup=keyboard)
+        else:
+            await message.answer_audio(audio=audio_file_id, caption=preview_msg, reply_markup=keyboard)
+    else:
+        await message.answer(preview_msg, reply_markup=keyboard)
+        
+    await state.set_state(ConfessionForm.waiting_for_confirmation)
+
+
+@dp.callback_query(StateFilter(ConfessionForm.waiting_for_confirmation), F.data == "confirm_confession")
+async def confirm_confession(callback_query: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    text = data.get("preview_text", "")
+    photo = data.get("preview_photo")
+    video = data.get("preview_video")
+    audio = data.get("preview_audio")
+    media_type = data.get("preview_media_type")
+    is_anon = data.get("preview_is_anon", False)
+    duration = data.get("preview_duration")
+    
+    await callback_query.message.edit_reply_markup(reply_markup=None)
+    
+    if video or audio:
+        await process_media_confession(callback_query.message, state, text, video, audio, duration, media_type, is_voice=(media_type=="voice"), voice_modified=is_anon)
+    else:
+        await process_confession(callback_query.message, state, text, photo)
+    
+    await callback_query.answer("Sent!")
+
+
+@dp.callback_query(StateFilter(ConfessionForm.waiting_for_confirmation), F.data == "cancel_confession")
+async def cancel_confession_preview(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback_query.message.edit_reply_markup(reply_markup=None)
+    await callback_query.message.answer("❌ Confession cancelled.")
+    await callback_query.answer()
+
+
 @dp.message(ConfessionForm.waiting_for_text, F.text)
 async def receive_text_confession(message: types.Message, state: FSMContext):
     if message.text.startswith('/'):
@@ -2380,7 +2460,7 @@ async def receive_text_confession(message: types.Message, state: FSMContext):
         await message.answer(f"⏳ Please wait {RATE_LIMIT_SECONDS} seconds between submissions.")
         return
     
-    await process_confession(message, state, text=message.text, photo_file_id=None)
+    await request_confession_preview(message, state, text=message.text)
 
 @dp.message(ConfessionForm.waiting_for_text, F.photo)
 async def receive_photo_confession(message: types.Message, state: FSMContext):
@@ -2400,7 +2480,7 @@ async def receive_photo_confession(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Photo is too large ({file_size_mb:.1f}MB). Maximum size is {MAX_PHOTO_SIZE_MB}MB.")
         return
     
-    await process_confession(message, state, text=text, photo_file_id=photo_file_id)
+    await request_confession_preview(message, state, text=text, photo_file_id=photo_file_id)
 
 @dp.message(ConfessionForm.waiting_for_text, F.video)
 async def receive_video_confession(message: types.Message, state: FSMContext):
@@ -2422,8 +2502,7 @@ async def receive_video_confession(message: types.Message, state: FSMContext):
     
     duration = message.video.duration if message.video.duration else None
     
-    await process_media_confession(message, state, text=text, video_file_id=video_file_id, 
-                                   audio_file_id=None, duration=duration, media_type="video")
+    await request_confession_preview(message, state, text=text, video_file_id=video_file_id, duration=duration, media_type="video")
 
 @dp.message(ConfessionForm.waiting_for_text, F.audio | F.voice)
 async def receive_audio_confession(message: types.Message, state: FSMContext):
@@ -2466,19 +2545,19 @@ async def handle_voice_choice(callback_query: types.CallbackQuery, state: FSMCon
     choice = callback_query.data.split("_")[-1]
     state_data = await state.get_data()
     
-    await process_media_confession(
+    await callback_query.message.delete()
+    is_voice = state_data.get('is_voice', False)
+    await request_confession_preview(
         callback_query.message, 
         state, 
         text=state_data.get('audio_text', ''),
         audio_file_id=state_data.get('audio_file_id'),
-        is_voice=state_data.get('is_voice', False),
         duration=state_data.get('audio_duration'),
-        media_type="audio",
-        voice_modified=(choice == "yes")
+        media_type="voice" if is_voice else "audio",
+        is_anon=(choice == "yes")
     )
     
     await callback_query.answer()
-    await state.clear()
 
 async def process_media_confession(message: types.Message, state: FSMContext, text: str, 
                                    video_file_id: Optional[str] = None, 
@@ -2488,7 +2567,7 @@ async def process_media_confession(message: types.Message, state: FSMContext, te
                                    is_voice: bool = False,
                                    voice_modified: bool = False):
     """Process video or audio confession"""
-    user_id = message.from_user.id if isinstance(message, types.Message) else message.chat.id
+    user_id = message.chat.id
     state_data = await state.get_data()
     selected_categories = state_data.get("selected_categories", [])
     
@@ -2566,7 +2645,7 @@ async def process_media_confession(message: types.Message, state: FSMContext, te
         await state.clear()
 
 async def process_confession(message: types.Message, state: FSMContext, text: str, photo_file_id: Optional[str] = None):
-    user_id = message.from_user.id
+    user_id = message.chat.id
     state_data = await state.get_data()
     selected_categories: List[str] = state_data.get("selected_categories", [])
     
