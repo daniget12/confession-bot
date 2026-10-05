@@ -905,11 +905,11 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
 
     nav_row = []
     if page > 1:
-        nav_row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"comments_page_{confession_id}_{page-1}"))
+        nav_row.append(InlineKeyboardButton(text="Prev", icon_custom_emoji_id="6318914868384632604", callback_data=f"comments_page_{confession_id}_{page-1}"))
     if total_pages > 1:
         nav_row.append(InlineKeyboardButton(text=f"Page {page}/{total_pages}", callback_data="noop"))
     if page < total_pages:
-        nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"comments_page_{confession_id}_{page+1}"))
+        nav_row.append(InlineKeyboardButton(text="Next", icon_custom_emoji_id="5359581893589214348", callback_data=f"comments_page_{confession_id}_{page+1}"))
     
     nav_keyboard = InlineKeyboardMarkup(inline_keyboard=[nav_row, [InlineKeyboardButton(text="Write Comment", icon_custom_emoji_id="5242667583802451480", callback_data=f"add_{confession_id}")]])
     end_txt = f"--- Showing comments {offset+1} to {min(offset+PAGE_SIZE, total_count)} of {total_count} for Confession #{confession_id} ---"
@@ -1039,11 +1039,11 @@ def create_profile_pagination_keyboard(base_callback: str, current_page: int, to
     builder = InlineKeyboardBuilder()
     row = []
     if current_page > 1:
-        row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"{base_callback}_{current_page - 1}"))
+        row.append(InlineKeyboardButton(text="Prev", icon_custom_emoji_id="6318914868384632604", callback_data=f"{base_callback}_{current_page - 1}"))
     if total_pages > 1:
         row.append(InlineKeyboardButton(text=f"Page {current_page}/{total_pages}", callback_data="noop"))
     if current_page < total_pages:
-        row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"{base_callback}_{current_page + 1}"))
+        row.append(InlineKeyboardButton(text="Next", icon_custom_emoji_id="5359581893589214348", callback_data=f"{base_callback}_{current_page + 1}"))
     if row:
         builder.row(*row)
     builder.row(InlineKeyboardButton(text="Back to Profile", icon_custom_emoji_id="5399818044866327279", callback_data="profile_main"))
