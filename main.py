@@ -1399,23 +1399,11 @@ async def end_chat_command(message: types.Message, state: FSMContext):
     
     if chat_id:
         await execute_update("UPDATE active_chats SET is_active = 0 WHERE id = $1", chat_id)
-        # Notify other user
-        chat_data = await fetch_one("SELECT user1_id, user2_id FROM active_chats WHERE id = $1", chat_id)
-        if chat_data:
-            other_id = chat_data['user1_id'] if chat_data['user2_id'] == message.from_user.id else chat_data['user2_id']
-            try:
-                is_admin_other = await is_admin(other_id)
-                await bot.send_message(other_id, "⚠️ <b>Chat disconnected</b>\n\nThe other user has ended the chat.", reply_markup=await get_main_menu_keyboard(is_admin_other, None))
-            except Exception:
-                pass
-                
         await state.clear()
-        is_admin_user = await is_admin(message.from_user.id)
-        await message.answer("✅ Chat ended.", reply_markup=await get_main_menu_keyboard(is_admin_user, state))
+        await message.answer("✅ Chat ended.")
     else:
         await state.clear()
-        is_admin_user = await is_admin(message.from_user.id)
-        await message.answer("Chat ended.", reply_markup=await get_main_menu_keyboard(is_admin_user, state))
+        await message.answer("Chat ended.")
 
 # --- Profile Command and Handlers ---
 @dp.message(Command("profile"))
@@ -1916,8 +1904,6 @@ async def view_chat_messages(callback_query: types.CallbackQuery, state: FSMCont
     ])
     
     await callback_query.message.edit_text(response_text, reply_markup=keyboard)
-    is_admin_user = await is_admin(user_id)
-    await callback_query.message.answer("🗨️ You are now in chat mode. Use the menu below to end the chat.", reply_markup=await get_main_menu_keyboard(is_admin_user, state))
     await callback_query.answer()
 
 @dp.message(ChatForm.chatting)
@@ -2017,8 +2003,7 @@ async def disconnect_chat(callback_query: types.CallbackQuery, state: FSMContext
         await state.clear()
     
     try:
-        is_admin_other = await is_admin(other_user_id)
-        await bot.send_message(other_user_id, "⚠️ <b>Chat disconnected</b>\n\nThe other user has ended the chat.", reply_markup=await get_main_menu_keyboard(is_admin_other, None))
+        await bot.send_message(other_user_id, "⚠️ <b>Chat disconnected</b>\n\nThe other user has ended the chat.")
     except Exception as e:
         logger.warning(f"Could not notify user {other_user_id}: {e}")
     
@@ -2028,8 +2013,6 @@ async def disconnect_chat(callback_query: types.CallbackQuery, state: FSMContext
             [InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main")]
         ])
     )
-    is_admin_user = await is_admin(user_id)
-    await callback_query.message.answer("Chat ended.", reply_markup=await get_main_menu_keyboard(is_admin_user, state))
     await callback_query.answer()
 
 @dp.callback_query(F.data == "pending_contact_requests")
