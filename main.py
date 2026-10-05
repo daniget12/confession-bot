@@ -945,10 +945,10 @@ async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, co
     if is_author and commenter_uid == confession_owner_id:
         # For confession owner: show "👑 Author" as a clickable link without name
         # The link goes to their profile
-        display_name = f"<a href='{profile_link}'>👑 Author</a> 🏅{points}{tag_str}"
+        display_name = f"<tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> <a href='{profile_link}'>Author</a> 🏅{points}{tag_str}"
     else:
         # For regular users: show their actual name with link
-        display_name = f"<a href='{profile_link}'>{profile_name}</a> 🏅{points}{tag_str}"
+        display_name = f"<tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> <a href='{profile_link}'>{profile_name}</a> 🏅{points}{tag_str}"
     
     admin_info = f" [UID: <code>{commenter_uid}</code>]" if is_admin_user else ""
     
@@ -1053,8 +1053,8 @@ def get_main_menu_keyboard(is_admin: bool = False):
     
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🕊️ Confess"), KeyboardButton(text="✨ Profile")],
-            [KeyboardButton(text="💡 Help"), KeyboardButton(text="⚖️ Rules")],
+            [KeyboardButton(text="✏️ Confess"), KeyboardButton(text="👤 Profile")],
+            [KeyboardButton(text="ℹ️ Help"), KeyboardButton(text="📖 Rules")],
             [KeyboardButton(text="🛡️ Privacy"), KeyboardButton(text="🚪 End Chat")],
             [KeyboardButton(text="✖️ Cancel")],
         ],
@@ -1066,7 +1066,7 @@ def get_main_menu_keyboard(is_admin: bool = False):
     if is_admin:
         keyboard.keyboard.append([
             KeyboardButton(text="⚙️ Admin Panel"),
-            KeyboardButton(text="📈 Stats")
+            KeyboardButton(text="📊 Stats")
         ])
     
     return keyboard
@@ -1237,7 +1237,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
         points = await get_user_points(user_id)
         
         welcome_text = (
-            f"👋 Welcome back, <b>{profile_name}</b>!\n\n"
+            f"👋 Welcome back, <tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> <b>{profile_name}</b>!\n\n"
             f"⭐ <b>Your Aura:</b> {points}\n\n"
             "<b>Available Commands:</b>\n"
             "🕊️ /confess - Submit an anonymous confession\n"
@@ -1422,7 +1422,7 @@ async def user_profile(message: types.Message):
     
     profile_text = f"✨ <b>Your Profile</b>\n\n"
     profile_text += f"⭐ <b>Aura Points:</b> {points}\n"
-    profile_text += f"🏷️ <b>Display Name:</b> {profile_name}\n\n"
+    profile_text += f"🏷️ <b>Display Name:</b> <tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> {html.quote(profile_name)}\n\n"
     profile_text += "<b>What would you like to do?</b>"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1839,7 +1839,7 @@ async def show_active_chats(callback_query: types.CallbackQuery):
     for chat in chats:
         other_user_name = chat['other_user_name'] or "Anonymous"
         last_msg_time = chat['last_message_at'].strftime('%Y-%m-%d %H:%M') if chat['last_message_at'] else "No messages"
-        response_text += f"👤 <b>{other_user_name}</b>\n   Last activity: {last_msg_time}\n\n"
+        response_text += f"👤 <tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> <b>{other_user_name}</b>\n   Last activity: {last_msg_time}\n\n"
         keyboard.button(text=f"💬 Chat with {other_user_name[:15]}", callback_data=f"view_chat_{chat['id']}")
     
     keyboard.button(text="↩ Back to Profile", callback_data="profile_main")
@@ -1881,7 +1881,7 @@ async def view_chat_messages(callback_query: types.CallbackQuery, state: FSMCont
         LIMIT 10
     """, chat_id)
     
-    response_text = f"💬 <b>Chat with {other_user_name}</b>\n\n"
+    response_text = f"💬 <b>Chat with <tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> {other_user_name}</b>\n\n"
     
     if not messages:
         response_text += "<i>No messages yet. Start the conversation!</i>\n\n"
@@ -1890,12 +1890,13 @@ async def view_chat_messages(callback_query: types.CallbackQuery, state: FSMCont
             sender_name = msg['sender_name'] or ("You" if msg['sender_id'] == user_id else "Anonymous")
             time_str = msg['created_at'].strftime('%H:%M') if msg['created_at'] else ""
             
+            emoji_tag = "" if sender_name == "You" else "<tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> "
             if msg['message_text']:
-                response_text += f"<b>{sender_name}</b> ({time_str}):\n{html.quote(msg['message_text'])}\n\n"
+                response_text += f"{emoji_tag}<b>{sender_name}</b> ({time_str}):\n{html.quote(msg['message_text'])}\n\n"
             elif msg['sticker_file_id']:
-                response_text += f"<b>{sender_name}</b> ({time_str}): [Sticker]\n\n"
+                response_text += f"{emoji_tag}<b>{sender_name}</b> ({time_str}): [Sticker]\n\n"
             elif msg['animation_file_id']:
-                response_text += f"<b>{sender_name}</b> ({time_str}): [GIF]\n\n"
+                response_text += f"{emoji_tag}<b>{sender_name}</b> ({time_str}): [GIF]\n\n"
     
     response_text += "<i>Send a message below to continue. Type /endchat to disconnect.</i>"
     
@@ -3615,23 +3616,23 @@ async def warn_user(message: types.Message):
 
 
 @dp.message(F.text.in_([
-    "🕊️ Confess", "✨ Profile", "💡 Help", "⚖️ Rules", 
+    "✏️ Confess", "👤 Profile", "ℹ️ Help", "📖 Rules", 
     "🛡️ Privacy", "🚪 End Chat", "✖️ Cancel", 
-    "⚙️ Admin Panel", "📈 Stats"
+    "⚙️ Admin Panel", "📊 Stats"
 ]))
 async def handle_menu_buttons(message: types.Message, state: FSMContext):
     button_text = message.text
     
-    if button_text == "🕊️ Confess":
+    if button_text == "✏️ Confess":
         await start_confession(message, state)
     
-    elif button_text == "✨ Profile":
+    elif button_text == "👤 Profile":
         await user_profile(message)
     
-    elif button_text == "💡 Help":
+    elif button_text == "ℹ️ Help":
         await help_command(message)
     
-    elif button_text == "⚖️ Rules":
+    elif button_text == "📖 Rules":
         await rules_command(message)
     
     elif button_text == "🛡️ Privacy":
@@ -3646,7 +3647,7 @@ async def handle_menu_buttons(message: types.Message, state: FSMContext):
     elif button_text == "⚙️ Admin Panel" and await is_admin(message.from_user.id):
         await admin_panel(message)
     
-    elif button_text == "📈 Stats" and await is_admin(message.from_user.id):
+    elif button_text == "📊 Stats" and await is_admin(message.from_user.id):
         await show_stats(message)
 
 
