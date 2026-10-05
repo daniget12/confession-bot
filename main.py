@@ -794,8 +794,8 @@ async def update_channel_post_button(confession_id: int):
     link = f"https://t.me/{bot_info.username}?start=view_{confession_id}"
     add_link = f"https://t.me/{bot_info.username}?start=addcomment_{confession_id}"
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Write Comment", icon_custom_emoji_id="5242667583802451480", url=add_link)],
-        [InlineKeyboardButton(text=f"Browse ({count})", icon_custom_emoji_id="5224450179368767019", url=link)]
+        [InlineKeyboardButton(text="✏️ Write Comment", url=add_link)],
+        [InlineKeyboardButton(text=f"≡ Browse ({count})", url=link)]
     ])
     
     try:
@@ -2876,8 +2876,8 @@ async def handle_approve_confession(callback_query: types.CallbackQuery, state: 
         category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories])
         
         channel_kbd = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Write Comment", icon_custom_emoji_id="5242667583802451480", url=add_link)],
-            [InlineKeyboardButton(text="Browse (0)", icon_custom_emoji_id="5224450179368767019", url=link)]
+            [InlineKeyboardButton(text="✏️ Write Comment", url=add_link)],
+            [InlineKeyboardButton(text="≡ Browse (0)", url=link)]
         ])
         
         if conf['video_file_id']:
