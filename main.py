@@ -1046,7 +1046,7 @@ def create_profile_pagination_keyboard(base_callback: str, current_page: int, to
         row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"{base_callback}_{current_page + 1}"))
     if row:
         builder.row(*row)
-    builder.row(InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main"))
+    builder.row(InlineKeyboardButton(text="Back to Profile", icon_custom_emoji_id="5399818044866327279", callback_data="profile_main"))
     return builder.as_markup()
 def get_main_menu_keyboard(is_admin: bool = False):
     """Create the main menu keyboard that appears above the text input"""
@@ -1148,7 +1148,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                 await state.update_data(confession_id=conf_id, parent_comment_id=None)
                 await state.set_state(CommentForm.waiting_for_comment)
                 cancel_kbd = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="✖️ Cancel", callback_data="cancel_comment")]
+                    [InlineKeyboardButton(text="Cancel", icon_custom_emoji_id="5280803324273115630", callback_data="cancel_comment")]
                 ])
                 await message.answer(
                     f"✏️ <b>Write a comment for Confession #{conf_id}</b>\n\n"
@@ -1217,13 +1217,13 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                     keyboard.button(text="💬 Start Chat", callback_data=f"start_chat_{target_user_id}")
                 else:
                     profile_text += "<i>You can request to chat with this user.</i>"
-                    keyboard.button(text="🤝 Request Contact", callback_data=f"req_contact_profile_{target_user_id}")
+                    keyboard.button(text="Request Contact", icon_custom_emoji_id="6255580013622464414", callback_data=f"req_contact_profile_{target_user_id}")
                 
                 # Report user button
                 if user_id != target_user_id:
                     keyboard.button(text="⚠️ Report User", callback_data=f"report_user_{target_user_id}")
                 
-                keyboard.button(text="↩ Back", callback_data="noop")
+                keyboard.button(text="Back", icon_custom_emoji_id="5399818044866327279", callback_data="noop")
                 keyboard.adjust(1)
                 
                 await message.answer(profile_text, reply_markup=keyboard.as_markup())
@@ -1237,7 +1237,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
         points = await get_user_points(user_id)
         
         welcome_text = (
-            f"👋 Welcome back, <tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> <b>{profile_name}</b>!\n\n"
+            f"<tg-emoji emoji-id=\"5339536521009571338\">👋</tg-emoji> Welcome back, <tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> <b>{profile_name}</b>!\n\n"
             f"<tg-emoji emoji-id=\"5280735858926822987\">⭐</tg-emoji> <b>Your Aura:</b> {points}\n\n"
             "<b>Available Commands:</b>\n"
             "🕊️ /confess - Submit an anonymous confession\n"
@@ -1420,17 +1420,17 @@ async def user_profile(message: types.Message):
     points = await get_user_points(user_id)
     profile_name = await get_profile_name(user_id)
     
-    profile_text = f"✨ <b>Your Profile</b>\n\n"
+    profile_text = f"<tg-emoji emoji-id=\"5373012449597335010\">✨</tg-emoji> <b>Your Profile</b>\n\n"
     profile_text += f"<tg-emoji emoji-id=\"5280735858926822987\">⭐</tg-emoji> <b>Aura Points:</b> {points}\n"
     profile_text += f"🏷️ <b>Display Name:</b> <tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> {html.quote(profile_name)}\n\n"
     profile_text += "<b>What would you like to do?</b>"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏷️ Change Display Name", callback_data="change_profile_name")],
-        [InlineKeyboardButton(text="🕊️ My Confessions", callback_data="profile_confessions_1")],
-        [InlineKeyboardButton(text="💭 My Comments", callback_data="profile_comments_1")],
-        [InlineKeyboardButton(text="🗨️ My Active Chats", callback_data="my_active_chats")],
-        [InlineKeyboardButton(text="📬 Pending Contact Requests", callback_data="pending_contact_requests")]
+        [InlineKeyboardButton(text="Change Display Name", icon_custom_emoji_id="5422683699130933153", callback_data="change_profile_name")],
+        [InlineKeyboardButton(text="My Confessions", icon_custom_emoji_id="5395444784611480792", callback_data="profile_confessions_1")],
+        [InlineKeyboardButton(text="My Comments", icon_custom_emoji_id="5956078724163046673", callback_data="profile_comments_1")],
+        [InlineKeyboardButton(text="My Active Chats", icon_custom_emoji_id="5262838597060422237", callback_data="my_active_chats")],
+        [InlineKeyboardButton(text="Pending Contact Requests", icon_custom_emoji_id="6084901676886526521", callback_data="pending_contact_requests")]
     ])
     
     await message.answer(profile_text, reply_markup=keyboard)
@@ -1598,17 +1598,17 @@ async def back_to_profile(callback_query: types.CallbackQuery):
     points = await get_user_points(user_id)
     profile_name = await get_profile_name(user_id)
     
-    profile_text = f"✨ <b>Your Profile</b>\n\n"
+    profile_text = f"<tg-emoji emoji-id=\"5373012449597335010\">✨</tg-emoji> <b>Your Profile</b>\n\n"
     profile_text += f"<tg-emoji emoji-id=\"5280735858926822987\">⭐</tg-emoji> <b>Aura Points:</b> {points}\n"
     profile_text += f"🏷️ <b>Display Name:</b> <tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> {html.quote(profile_name)}\n\n"
     profile_text += "<b>What would you like to do?</b>"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏷️ Change Display Name", callback_data="change_profile_name")],
-        [InlineKeyboardButton(text="🕊️ My Confessions", callback_data="profile_confessions_1")],
-        [InlineKeyboardButton(text="💭 My Comments", callback_data="profile_comments_1")],
-        [InlineKeyboardButton(text="🗨️ My Active Chats", callback_data="my_active_chats")],
-        [InlineKeyboardButton(text="📬 Pending Contact Requests", callback_data="pending_contact_requests")]
+        [InlineKeyboardButton(text="Change Display Name", icon_custom_emoji_id="5422683699130933153", callback_data="change_profile_name")],
+        [InlineKeyboardButton(text="My Confessions", icon_custom_emoji_id="5395444784611480792", callback_data="profile_confessions_1")],
+        [InlineKeyboardButton(text="My Comments", icon_custom_emoji_id="5956078724163046673", callback_data="profile_comments_1")],
+        [InlineKeyboardButton(text="My Active Chats", icon_custom_emoji_id="5262838597060422237", callback_data="my_active_chats")],
+        [InlineKeyboardButton(text="Pending Contact Requests", icon_custom_emoji_id="6084901676886526521", callback_data="pending_contact_requests")]
     ])
     
     await callback_query.message.edit_text(profile_text, reply_markup=keyboard)
@@ -1659,7 +1659,7 @@ async def show_user_confessions(callback_query: types.CallbackQuery):
         await callback_query.message.edit_text(
             "📭 <b>Your Confessions</b>\n\nYou haven't submitted any confessions yet.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main")]
+                [InlineKeyboardButton(text="Back to Profile", icon_custom_emoji_id="5399818044866327279", callback_data="profile_main")]
             ])
         )
         await callback_query.answer()
@@ -1711,7 +1711,7 @@ async def show_user_comments(callback_query: types.CallbackQuery):
         await callback_query.message.edit_text(
             "💬 <b>Your Comments</b>\n\nYou haven't made any comments yet.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main")]
+                [InlineKeyboardButton(text="Back to Profile", icon_custom_emoji_id="5399818044866327279", callback_data="profile_main")]
             ])
         )
         await callback_query.answer()
@@ -1827,7 +1827,7 @@ async def show_active_chats(callback_query: types.CallbackQuery):
         await callback_query.message.edit_text(
             "💬 <b>Your Active Chats</b>\n\nYou have no active chats.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main")]
+                [InlineKeyboardButton(text="Back to Profile", icon_custom_emoji_id="5399818044866327279", callback_data="profile_main")]
             ])
         )
         await callback_query.answer()
@@ -1840,9 +1840,9 @@ async def show_active_chats(callback_query: types.CallbackQuery):
         other_user_name = chat['other_user_name'] or "Anonymous"
         last_msg_time = chat['last_message_at'].strftime('%Y-%m-%d %H:%M') if chat['last_message_at'] else "No messages"
         response_text += f"👤 <tg-emoji emoji-id=\"6192874753821247607\">👑</tg-emoji> <b>{other_user_name}</b>\n   Last activity: {last_msg_time}\n\n"
-        keyboard.button(text=f"💬 Chat with {other_user_name[:15]}", callback_data=f"view_chat_{chat['id']}")
+        keyboard.button(text=f"Chat with {other_user_name[:15]}", icon_custom_emoji_id="5251601734253421368", callback_data=f"view_chat_{chat['id']}")
     
-    keyboard.button(text="↩ Back to Profile", callback_data="profile_main")
+    keyboard.button(text="Back to Profile", icon_custom_emoji_id="5399818044866327279", callback_data="profile_main")
     keyboard.adjust(1)
     
     await callback_query.message.edit_text(response_text, reply_markup=keyboard.as_markup())
@@ -1901,8 +1901,8 @@ async def view_chat_messages(callback_query: types.CallbackQuery, state: FSMCont
     response_text += "<i>Send a message below to continue. Type /endchat to disconnect.</i>"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⛓️‍💥 Disconnect Chat", callback_data=f"disconnect_chat_{chat_id}")],
-        [InlineKeyboardButton(text="↩ Back to Chats", callback_data="my_active_chats")]
+        [InlineKeyboardButton(text="Disconnect Chat", icon_custom_emoji_id="5336965905773504919", callback_data=f"disconnect_chat_{chat_id}")],
+        [InlineKeyboardButton(text="Back to Chats", icon_custom_emoji_id="5399818044866327279", callback_data="my_active_chats")]
     ])
     
     await callback_query.message.edit_text(response_text, reply_markup=keyboard)
@@ -2012,7 +2012,7 @@ async def disconnect_chat(callback_query: types.CallbackQuery, state: FSMContext
     await callback_query.message.edit_text(
         "✅ Chat disconnected.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main")]
+            [InlineKeyboardButton(text="Back to Profile", icon_custom_emoji_id="5399818044866327279", callback_data="profile_main")]
         ])
     )
     await callback_query.answer()
@@ -2033,7 +2033,7 @@ async def show_pending_contact_requests(callback_query: types.CallbackQuery):
         await callback_query.message.edit_text(
             "📨 <b>Pending Contact Requests</b>\n\nYou have no pending contact requests.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main")]
+                [InlineKeyboardButton(text="Back to Profile", icon_custom_emoji_id="5399818044866327279", callback_data="profile_main")]
             ])
         )
         await callback_query.answer()
@@ -2057,7 +2057,7 @@ async def show_pending_contact_requests(callback_query: types.CallbackQuery):
             InlineKeyboardButton(text=f"❌ Reject", callback_data=f"reject_contact_{req['id']}")
         )
     
-    keyboard.row(InlineKeyboardButton(text="↩ Back to Profile", callback_data="profile_main"))
+    keyboard.row(InlineKeyboardButton(text="Back to Profile", icon_custom_emoji_id="5399818044866327279", callback_data="profile_main"))
     
     await callback_query.message.edit_text(response_text, reply_markup=keyboard.as_markup())
     await callback_query.answer()
@@ -2121,13 +2121,13 @@ async def view_user_profile(callback_query: types.CallbackQuery):
     else:
         profile_text += "<i>You can request to chat with this user.</i>"
         # Contact request button
-        keyboard.button(text="🤝 Request Contact", callback_data=f"req_contact_profile_{target_user_id}")
+        keyboard.button(text="Request Contact", icon_custom_emoji_id="6255580013622464414", callback_data=f"req_contact_profile_{target_user_id}")
     
     # Report user button (for all viewers except self)
     if viewer_id != target_user_id:
         keyboard.button(text="⚠️ Report User", callback_data=f"report_user_{target_user_id}")
     
-    keyboard.button(text="↩ Back", callback_data="noop")
+    keyboard.button(text="Back", icon_custom_emoji_id="5399818044866327279", callback_data="noop")
     keyboard.adjust(1)
     
     await callback_query.message.edit_text(profile_text, reply_markup=keyboard.as_markup())
@@ -2399,11 +2399,11 @@ async def request_confession_preview(message: types.Message, state: FSMContext, 
         return
         
     category_tags = " ".join([f"#{html.quote(cat)}" for cat in selected_categories])
-    preview_msg = f"👀 <b>Confession Preview</b>\n<b>Categories:</b> {category_tags}\n\n<b>Caption/Text:</b>\n{html.quote(text)}"
+    preview_msg = f"<tg-emoji emoji-id=\"5190660993046301377\">👀</tg-emoji> <b>Confession Preview</b>\n<b>Categories:</b> {category_tags}\n\n<b>Caption/Text:</b>\n{html.quote(text)}"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Send Confession", callback_data="confirm_confession")],
-        [InlineKeyboardButton(text="✖️ Cancel", callback_data="cancel_confession")]
+        [InlineKeyboardButton(text="Send Confession", icon_custom_emoji_id="5307879566906247625", callback_data="confirm_confession")],
+        [InlineKeyboardButton(text="Cancel", icon_custom_emoji_id="5280803324273115630", callback_data="cancel_confession")]
     ])
     
     if photo_file_id:
@@ -2513,7 +2513,7 @@ async def receive_audio_confession(message: types.Message, state: FSMContext):
     
     # Ask user about voice modification
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎭 Anonymize Voice (Recommended)", callback_data="voice_anon_yes")],
+        [InlineKeyboardButton(text="Anonymize Voice (Recommended)", icon_custom_emoji_id="5260382369688333746", callback_data="voice_anon_yes")],
         [InlineKeyboardButton(text="🎤 Keep Original Voice", callback_data="voice_anon_no")]
     ])
     
@@ -3725,7 +3725,7 @@ async def block_user_start(message: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="7 Days", callback_data="block_7d")],
         [InlineKeyboardButton(text="30 Days", callback_data="block_30d")],
         [InlineKeyboardButton(text="🔴 PERMANENT", callback_data="block_permanent")],
-        [InlineKeyboardButton(text="✖️ Cancel", callback_data="block_cancel")]
+        [InlineKeyboardButton(text="Cancel", icon_custom_emoji_id="5280803324273115630", callback_data="block_cancel")]
     ])
     
     profile_name = user_status['profile_name'] or "Anonymous"
@@ -4004,7 +4004,7 @@ async def broadcast_command(message: types.Message, state: FSMContext):
     
     confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Yes, Broadcast", callback_data="confirm_broadcast"),
-         InlineKeyboardButton(text="✖️ Cancel", callback_data="cancel_broadcast")]
+         InlineKeyboardButton(text="Cancel", icon_custom_emoji_id="5280803324273115630", callback_data="cancel_broadcast")]
     ])
     
     await message.answer(
