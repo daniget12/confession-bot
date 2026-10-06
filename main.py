@@ -794,7 +794,7 @@ async def update_channel_post_button(confession_id: int):
     link = f"https://t.me/{bot_info.username}?start=view_{confession_id}"
     add_link = f"https://t.me/{bot_info.username}?start=addcomment_{confession_id}"
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Add/Browse Comment ({count})", url=link)]
+        [InlineKeyboardButton(text=f"≡ Add/Browse Comment ({count})", url=link)]
     ])
     
     try:
@@ -2875,7 +2875,7 @@ async def handle_approve_confession(callback_query: types.CallbackQuery, state: 
         category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories])
         
         channel_kbd = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Add/Browse Comment (0)", url=link)]
+            [InlineKeyboardButton(text="≡ Add/Browse Comment (0)", url=link)]
         ])
         
         if conf['video_file_id']:
