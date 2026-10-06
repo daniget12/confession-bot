@@ -794,8 +794,7 @@ async def update_channel_post_button(confession_id: int):
     link = f"https://t.me/{bot_info.username}?start=view_{confession_id}"
     add_link = f"https://t.me/{bot_info.username}?start=addcomment_{confession_id}"
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Write Comment", url=add_link)],
-        [InlineKeyboardButton(text=f"≡ Browse ({count})", url=link)]
+        [InlineKeyboardButton(text=f"Add/Browse Comment ({count})", url=link)]
     ])
     
     try:
@@ -1151,7 +1150,7 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
                     [InlineKeyboardButton(text="Cancel", icon_custom_emoji_id="5280803324273115630", callback_data="cancel_comment")]
                 ])
                 await message.answer(
-                    f"✏️ <b>Write a comment for Confession #{conf_id}</b>\n\n"
+                    f"<tg-emoji emoji-id=\"5242667583802451480\">✏️</tg-emoji> <b>Write a comment for Confession #{conf_id}</b>\n\n"
                     f"Send your comment text, sticker, or GIF.\n"
                     f"Type /cancel to abort.",
                     reply_markup=cancel_kbd
@@ -2876,8 +2875,7 @@ async def handle_approve_confession(callback_query: types.CallbackQuery, state: 
         category_tags = " ".join([f"#{html.quote(cat)}" for cat in categories])
         
         channel_kbd = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✏️ Write Comment", url=add_link)],
-            [InlineKeyboardButton(text="≡ Browse (0)", url=link)]
+            [InlineKeyboardButton(text="Add/Browse Comment (0)", url=link)]
         ])
         
         if conf['video_file_id']:
