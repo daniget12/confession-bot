@@ -8,6 +8,7 @@ import re
 import time
 import hashlib
 import sys
+import calendar
 from collections import defaultdict
 from typing import Optional, Tuple, Dict, Any, List, Set
 from datetime import datetime, timedelta
@@ -256,6 +257,81 @@ async def get_user_id_from_encoded(encoded_id: str) -> Optional[int]:
 
 
 
+
+async def post_monthly_leaderboard():
+    if not CHANNEL_ID:
+        return
+        
+    try:
+        top_users = await execute_query("""
+            SELECT 
+                up.user_id,
+                COALESCE(us.profile_name, 'Anonymous') as profile_name,
+                COALESCE(up.points, 0) as points,
+                CASE 
+                    WHEN up.last_updated_month = to_char(CURRENT_DATE, 'YYYY-MM') THEN up.points_this_month 
+                    ELSE 0 
+                END as points_this_month
+            FROM user_points up
+            LEFT JOIN user_status us ON up.user_id = us.user_id
+            WHERE up.points > 0 
+            ORDER BY up.points DESC
+            LIMIT 10
+        """)
+        
+        if not top_users:
+            return
+            
+        bio = leaderboard_img.generate_leaderboard_image(top_users)
+        photo = BufferedInputFile(bio.getvalue(), filename='leaderboard.png')
+        
+        await bot.send_photo(
+            chat_id=CHANNEL_ID,
+            photo=photo
+        )
+        logger.info("Monthly leaderboard posted to channel successfully.")
+        
+    except Exception as e:
+        logger.error(f"Failed to post monthly leaderboard: {e}", exc_info=True)
+
+
+async def monthly_leaderboard_task():
+    while True:
+        try:
+            now = datetime.now()
+            # Find the last day of the current month
+            _, last_day = calendar.monthrange(now.year, now.month)
+            
+            # Post it at 20:00 (8 PM) on the last day of the month
+            target = now.replace(day=last_day, hour=20, minute=0, second=0, microsecond=0)
+            
+            if now > target:
+                # Move to next month
+                if now.month == 12:
+                    next_month = 1
+                    next_year = now.year + 1
+                else:
+                    next_month = now.month + 1
+                    next_year = now.year
+                
+                _, next_last_day = calendar.monthrange(next_year, next_month)
+                target = target.replace(year=next_year, month=next_month, day=next_last_day)
+                
+            sleep_seconds = (target - now).total_seconds()
+            logger.info(f"Monthly leaderboard will be posted in {sleep_seconds} seconds (at {target})")
+            
+            await asyncio.sleep(sleep_seconds)
+            
+            # Wake up and post
+            await post_monthly_leaderboard()
+            
+            # Sleep a bit to avoid posting multiple times
+            await asyncio.sleep(3600)
+        except Exception as e:
+            logger.error(f"Error in monthly leaderboard task: {e}")
+            await asyncio.sleep(3600)
+
+
 # --- Database Setup ---
 
 async def create_db_pool():
@@ -297,6 +373,7 @@ async def create_db_pool():
         
         # Start background tasks
         asyncio.create_task(rate_limiter.cleanup_task())
+        asyncio.create_task(monthly_leaderboard_task())
         
         return db
     except Exception as e:
