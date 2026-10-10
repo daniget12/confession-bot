@@ -497,6 +497,18 @@ async def setup():
                 CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at);
             """)
             
+            # Add monthly points tracking
+            await conn.execute("""
+                DO $$ 
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='user_points' AND column_name='points_this_month') THEN
+                        ALTER TABLE user_points ADD COLUMN points_this_month INTEGER NOT NULL DEFAULT 0;
+                    END IF;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='user_points' AND column_name='last_updated_month') THEN
+                        ALTER TABLE user_points ADD COLUMN last_updated_month VARCHAR(7) NOT NULL DEFAULT to_char(CURRENT_DATE, 'YYYY-MM');
+                    END IF;
+                END $$;
+            """)
             logger.info("✅ All database tables ready")
         
     except Exception as e:
@@ -718,11 +730,18 @@ async def get_user_points(user_id: int) -> int:
 async def update_user_points(user_id: int, delta: int):
     if delta == 0:
         return
-    await execute_update(
-        "INSERT INTO user_points (user_id, points) VALUES ($1, $2) "
-        "ON CONFLICT (user_id) DO UPDATE SET points = user_points.points + $2",
-        user_id, delta
-    )
+    current_month = datetime.now().strftime("%Y-%m")
+    await execute_update("""
+        INSERT INTO user_points (user_id, points, points_this_month, last_updated_month) 
+        VALUES ($1, $2, $2, $3) 
+        ON CONFLICT (user_id) DO UPDATE SET 
+            points = user_points.points + $2,
+            points_this_month = CASE 
+                WHEN user_points.last_updated_month = $3 THEN user_points.points_this_month + $2
+                ELSE $2
+            END,
+            last_updated_month = $3
+    """, user_id, delta, current_month)
 async def build_comment_keyboard(comment_id: int, commenter_user_id: int, viewer_user_id: int, confession_owner_id: int, is_admin: bool = False):
     likes, dislikes = await get_comment_reactions(comment_id)
     builder = InlineKeyboardBuilder()
@@ -1462,7 +1481,11 @@ async def show_top_aura(message: types.Message):
             SELECT 
                 up.user_id,
                 COALESCE(us.profile_name, 'Anonymous') as profile_name,
-                COALESCE(up.points, 0) as points
+                COALESCE(up.points, 0) as points,
+                CASE 
+                    WHEN up.last_updated_month = to_char(CURRENT_DATE, 'YYYY-MM') THEN up.points_this_month 
+                    ELSE 0 
+                END as points_this_month
             FROM user_points up
             LEFT JOIN user_status us ON up.user_id = us.user_id
             WHERE up.points > 0 
@@ -1538,9 +1561,13 @@ async def refresh_top_aura(callback_query: types.CallbackQuery):
     # Re-fetch top users
     top_users = await execute_query("""
         SELECT 
-            u.user_id,
+            up.user_id,
             COALESCE(us.profile_name, 'Anonymous') as profile_name,
-            COALESCE(up.points, 0) as points
+            COALESCE(up.points, 0) as points,
+            CASE 
+                WHEN up.last_updated_month = to_char(CURRENT_DATE, 'YYYY-MM') THEN up.points_this_month 
+                ELSE 0 
+            END as points_this_month
         FROM user_points up
         INNER JOIN user_status us ON up.user_id = us.user_id
         WHERE up.points > 0 AND us.has_accepted_rules = TRUE AND us.is_blocked = FALSE

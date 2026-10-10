@@ -30,7 +30,7 @@ def generate_leaderboard_image(top_users):
     # Load fonts
     font_path = "Poppins-SemiBold.ttf"
     try:
-        title_font = ImageFont.truetype(font_path, 48)
+        title_font = ImageFont.truetype(font_path, 40)
         name_font = ImageFont.truetype(font_path, 32)
         points_font = ImageFont.truetype(font_path, 28)
     except IOError:
@@ -42,7 +42,9 @@ def generate_leaderboard_image(top_users):
     # Draw header
     with Pilmoji(img) as pilmoji:
         # Centered title
-        title_text = "🏆 Top Aura Holders 🏆"
+        from datetime import datetime
+        current_month = datetime.now().strftime("%B")
+        title_text = f"🏆 Top Aura Holders - {current_month} 🏆"
         try:
             bbox = title_font.getbbox(title_text)
             title_w = bbox[2] - bbox[0]
@@ -70,19 +72,28 @@ def generate_leaderboard_image(top_users):
             
             # Name
             name = user['profile_name']
-            if len(name) > 20:
-                name = name[:18] + "..."
+            if len(name) > 18:
+                name = name[:16] + "..."
             pilmoji.text((padding + 90, row_y + 15), name, fill=text_primary, font=name_font)
             
             # Points
-            points_text = f"⭐ {user['points']} pts"
+            pts_this_month = user.get('points_this_month', 0)
+            if pts_this_month > 0:
+                points_text = f"⭐ {user['points']} (+{pts_this_month})"
+            else:
+                points_text = f"⭐ {user['points']} pts"
+                
             try:
                 bbox = points_font.getbbox(points_text)
                 points_w = bbox[2] - bbox[0]
             except AttributeError:
                 points_w = points_font.getlength(points_text)
                 
-            pilmoji.text((width - padding - points_w - 20, row_y + 18), points_text, fill=text_secondary, font=points_font)
+            # If they have + points, make the text slightly greener or just use text_secondary
+            if pts_this_month > 0:
+                pilmoji.text((width - padding - points_w - 20, row_y + 18), points_text, fill=(150, 255, 150), font=points_font)
+            else:
+                pilmoji.text((width - padding - points_w - 20, row_y + 18), points_text, fill=text_secondary, font=points_font)
             
             y_offset += row_height
 
