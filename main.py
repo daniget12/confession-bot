@@ -1517,19 +1517,13 @@ async def show_top_aura(message: types.Message):
             WHERE points > 0
         """)
         
-        caption = (
-            f"<tg-emoji emoji-id=\"5280735858926822987\">🏆</tg-emoji> <b>Top {len(top_users)} Aura Holders</b>\n"
-            f"Total Holders: {total_users['count'] if total_users else 0}\n"
-            f"Total Points: {total_points['total'] if total_points else 0}"
-        )
-        
         # Send response with inline keyboard for refresh
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"refresh_top_{limit}")],
             [InlineKeyboardButton(text="📈 View Full Stats", callback_data="stats")]
         ])
         
-        await message.answer_photo(photo=photo, caption=caption, reply_markup=keyboard)
+        await message.answer_photo(photo=photo, reply_markup=keyboard)
         
     except Exception as e:
         logger.error(f"Error in top command: {e}", exc_info=True)
@@ -1587,19 +1581,13 @@ async def refresh_top_aura(callback_query: types.CallbackQuery):
     total_users = await fetch_one("SELECT COUNT(DISTINCT user_id) as count FROM user_points WHERE points > 0")
     total_points = await fetch_one("SELECT COALESCE(SUM(points), 0) as total FROM user_points WHERE points > 0")
     
-    caption = (
-        f"<tg-emoji emoji-id=\"5280735858926822987\">🏆</tg-emoji> <b>Top {len(top_users)} Aura Holders (Updated)</b>\n"
-        f"Total Holders: {total_users['count'] if total_users else 0}\n"
-        f"Total Points: {total_points['total'] if total_points else 0}"
-    )
-    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"refresh_top_{limit}")],
         [InlineKeyboardButton(text="📈 View Stats", callback_data="stats")]
     ])
     
     try:
-        media = InputMediaPhoto(media=photo, caption=caption)
+        media = InputMediaPhoto(media=photo)
         await callback_query.message.edit_media(media=media, reply_markup=keyboard)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e).lower():
