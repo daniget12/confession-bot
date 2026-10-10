@@ -1065,7 +1065,8 @@ def get_main_menu_keyboard(is_admin: bool = False):
     if is_admin:
         keyboard.keyboard.append([
             KeyboardButton(text="Admin Panel", icon_custom_emoji_id="6129805886383723340"),
-            KeyboardButton(text="Stats", icon_custom_emoji_id="5431577498364158238")
+            KeyboardButton(text="Stats", icon_custom_emoji_id="5431577498364158238"),
+            KeyboardButton(text="Leaderboard", icon_custom_emoji_id="5280735858926822987")
         ])
     
     return keyboard
@@ -1475,7 +1476,7 @@ async def show_top_aura(message: types.Message):
             return
         
         # Build response
-        response_text = f"🏆 <b>Top {len(top_users)} Aura Holders</b>\n\n"
+        response_text = f"<tg-emoji emoji-id=\"5280735858926822987\">🏆</tg-emoji> <b>Top {len(top_users)} Aura Holders</b>\n\n"
         
         # Add medals for top 3
         medals = ["🥇", "🥈", "🥉"]
@@ -1491,7 +1492,7 @@ async def show_top_aura(message: types.Message):
             profile_link = await get_encoded_profile_link(user['user_id'])
             
             response_text += f"{prefix}<b>{html.quote(user['profile_name'])}</b>"
-            response_text += f"🏅 {user['points']} points \n "
+            response_text += f"<tg-emoji emoji-id=\"5280735858926822987\">⭐</tg-emoji> {user['points']} points \n "
             
 
             
@@ -1566,7 +1567,7 @@ async def refresh_top_aura(callback_query: types.CallbackQuery):
         await callback_query.answer()
         return
     
-    response_text = f"🏆 <b>Top {len(top_users)} Aura Holders (Updated)</b>\n\n"
+    response_text = f"<tg-emoji emoji-id=\"5280735858926822987\">🏆</tg-emoji> <b>Top {len(top_users)} Aura Holders (Updated)</b>\n\n"
     medals = ["🥇", "🥈", "🥉"]
     
     for idx, user in enumerate(top_users, 1):
@@ -3420,7 +3421,8 @@ async def admin_panel(message: types.Message):
         "⏸️ /block - Temporarily block\n"
         "🚫 /pblock - Permanently block\n"
         "✅ /unblock - Unblock user\n"
-        "📢 /broadcast - Broadcast message"
+        "📢 /broadcast - Broadcast message\n"
+        "🏆 /top - Show Leaderboard"
     )
     await message.answer(admin_text)
 
@@ -3647,6 +3649,10 @@ async def handle_menu_buttons(message: types.Message, state: FSMContext):
     
     elif button_text == "Stats" and await is_admin(message.from_user.id):
         await show_stats(message)
+    
+    elif button_text == "Leaderboard" and await is_admin(message.from_user.id):
+        message.text = "/top" # Default to top 10
+        await show_top_aura(message)
 
 
 @dp.message(Command("menu"))
