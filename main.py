@@ -1,3 +1,5 @@
+from aiogram.types import BufferedInputFile, InputMediaPhoto
+import leaderboard_img
 import logging
 import asyncpg
 import os
@@ -1475,29 +1477,9 @@ async def show_top_aura(message: types.Message):
             await message.answer("📊 No users with aura points found yet.\n\nUsers earn points by:\n• Submitting confessions (+1)\n• Receiving likes on comments (+1)")
             return
         
-        # Build response
-        response_text = f"<tg-emoji emoji-id=\"5280735858926822987\">🏆</tg-emoji> <b>Top {len(top_users)} Aura Holders</b>\n\n"
-        
-        # Add medals for top 3
-        medals = ["🥇", "🥈", "🥉"]
-        
-        for idx, user in enumerate(top_users, 1):
-            # Add medal emoji for top 3, otherwise just number
-            if idx <= 3:
-                prefix = f"{medals[idx-1]} "
-            else:
-                prefix = f"{idx}. "
-            
-            # Generate profile link
-            profile_link = await get_encoded_profile_link(user['user_id'])
-            
-            response_text += f"{prefix}<b>{html.quote(user['profile_name'])}</b>"
-            response_text += f"<tg-emoji emoji-id=\"5280735858926822987\">⭐</tg-emoji> {user['points']} points \n "
-            
-
-            
-            # Add clickable profile link
-            response_text += f" | <a href='{profile_link}'>View Profile</a>\n\n"
+        # Generate image
+        bio = leaderboard_img.generate_leaderboard_image(top_users)
+        photo = BufferedInputFile(bio.getvalue(), filename='leaderboard.png')
         
         # Add stats
         total_users = await fetch_one("""
@@ -1512,7 +1494,11 @@ async def show_top_aura(message: types.Message):
             WHERE points > 0
         """)
         
-
+        caption = (
+            f"<tg-emoji emoji-id=\"5280735858926822987\">🏆</tg-emoji> <b>Top {len(top_users)} Aura Holders</b>\n"
+            f"Total Holders: {total_users['count'] if total_users else 0}\n"
+            f"Total Points: {total_points['total'] if total_points else 0}"
+        )
         
         # Send response with inline keyboard for refresh
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1520,7 +1506,7 @@ async def show_top_aura(message: types.Message):
             [InlineKeyboardButton(text="📈 View Full Stats", callback_data="stats")]
         ])
         
-        await message.answer(response_text, reply_markup=keyboard, disable_web_page_preview=True)
+        await message.answer_photo(photo=photo, caption=caption, reply_markup=keyboard)
         
     except Exception as e:
         logger.error(f"Error in top command: {e}", exc_info=True)
@@ -1567,28 +1553,31 @@ async def refresh_top_aura(callback_query: types.CallbackQuery):
         await callback_query.answer()
         return
     
-    response_text = f"<tg-emoji emoji-id=\"5280735858926822987\">🏆</tg-emoji> <b>Top {len(top_users)} Aura Holders (Updated)</b>\n\n"
-    medals = ["🥇", "🥈", "🥉"]
+    # Generate image
+    bio = leaderboard_img.generate_leaderboard_image(top_users)
+    photo = BufferedInputFile(bio.getvalue(), filename='leaderboard.png')
     
-    for idx, user in enumerate(top_users, 1):
-        if idx <= 3:
-            prefix = f"{medals[idx-1]} "
-        else:
-            prefix = f"{idx}. "
-        
-        profile_link = await get_encoded_profile_link(user['user_id'])
-        
-        response_text += f"{prefix}<b>{html.quote(user['profile_name'])}</b> "
-        response_text += f"🏅 {user['points']} points"
-        response_text += f"\n   <code>{user['user_id']}</code>"
-        response_text += f" | <a href='{profile_link}'>Profile</a>\n\n"
+    total_users = await fetch_one("SELECT COUNT(DISTINCT user_id) as count FROM user_points WHERE points > 0")
+    total_points = await fetch_one("SELECT COALESCE(SUM(points), 0) as total FROM user_points WHERE points > 0")
+    
+    caption = (
+        f"<tg-emoji emoji-id=\"5280735858926822987\">🏆</tg-emoji> <b>Top {len(top_users)} Aura Holders (Updated)</b>\n"
+        f"Total Holders: {total_users['count'] if total_users else 0}\n"
+        f"Total Points: {total_points['total'] if total_points else 0}"
+    )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"refresh_top_{limit}")],
         [InlineKeyboardButton(text="📈 View Stats", callback_data="stats")]
     ])
     
-    await callback_query.message.edit_text(response_text, reply_markup=keyboard, disable_web_page_preview=True)
+    try:
+        media = InputMediaPhoto(media=photo, caption=caption)
+        await callback_query.message.edit_media(media=media, reply_markup=keyboard)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            raise
+    
     await callback_query.answer("List refreshed!")
 
 
