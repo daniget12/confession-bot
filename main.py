@@ -124,6 +124,7 @@ class CommentForm(StatesGroup):
 
 class ContactAdminForm(StatesGroup):
     waiting_for_message = State()
+    waiting_for_admin_reply = State()
 
 class AdminActions(StatesGroup):
     waiting_for_rejection_reason = State()
@@ -1454,6 +1455,7 @@ async def help_command(message: types.Message):
         "👤 /profile - View and manage your profile\n"
         "📜 /rules - View the bot's rules\n"
         "🔒 /privacy - View privacy information\n"
+        "📩 /contact_admin - Contact Admin (Support / Sponsors)\n"
         "❌ /cancel - Cancel current action\n"
         "💬 /endchat - End current chat\n\n"
         "<b>Profile Features:</b>\n"
@@ -3516,6 +3518,139 @@ async def handle_request_contact(callback_query: types.CallbackQuery):
 
 
 
+
+# --- Contact Admin & Support (Directly to Primary Admin) ---
+
+@dp.message(Command("contact_admin"))
+@dp.message(Command("support"))
+@dp.callback_query(F.data == "contact_admin")
+async def contact_admin_start(event: types.Message | types.CallbackQuery, state: FSMContext):
+    await state.set_state(ContactAdminForm.waiting_for_message)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_contact_admin")]
+    ])
+    msg_text = (
+        "📩 <b>Contact Primary Admin (Support / Sponsor / Inquiry)</b>\n\n"
+        "Please send the message you want to deliver to the bot owner below. "
+        "You can ask questions, report an issue, or discuss giveaway sponsorships/advertising.\n\n"
+        "<i>Send your text now or tap Cancel below.</i>"
+    )
+    if isinstance(event, types.CallbackQuery):
+        await event.message.answer(msg_text, reply_markup=keyboard)
+        await event.answer()
+    else:
+        await event.answer(msg_text, reply_markup=keyboard)
+
+
+@dp.callback_query(F.data == "cancel_contact_admin")
+async def cancel_contact_admin_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback_query.message.edit_text("❌ Contact message cancelled.")
+    await callback_query.answer("Cancelled")
+
+
+@dp.message(StateFilter(ContactAdminForm.waiting_for_message))
+async def handle_contact_admin_message(message: types.Message, state: FSMContext):
+    if message.text and message.text.startswith('/'):
+        if message.text.lower() in ['/cancel', '/start']:
+            await state.clear()
+            await message.answer("❌ Contact message cancelled.")
+            return
+        await message.answer("Please send your message or type /cancel to abort.")
+        return
+    
+    sender = message.from_user
+    profile_name = await get_profile_name(sender.id)
+    username_str = f"@{sender.username}" if sender.username else "No username"
+    
+    admin_text = (
+        f"📩 <b>New Message from User!</b>\n\n"
+        f"👤 <b>Name:</b> {html.quote(sender.full_name)}\n"
+        f"🏷️ <b>Username:</b> {username_str}\n"
+        f"🆔 <b>User ID:</b> <code>{sender.id}</code>\n"
+        f"👑 <b>Profile:</b> {html.quote(profile_name)}\n\n"
+        f"💬 <b>Message:</b>\n{html.quote(message.text or '[Media/Attachment]')}"
+    )
+    
+    reply_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✍️ Reply to User", callback_data=f"admin_reply_{sender.id}")]
+    ])
+    
+    # Send exclusively to the Primary Admin (Hardcoded Owner ID)
+    try:
+        await safe_send_message(PRIMARY_ADMIN_ID, admin_text, reply_markup=reply_keyboard)
+    except Exception as e:
+        logger.error(f"Failed to forward message to primary admin: {e}")
+        await message.answer("⚠️ Could not deliver your message right now. Please try again later.")
+        await state.clear()
+        return
+    
+    await state.clear()
+    await message.answer(
+        "✅ <b>Your message has been delivered directly to the bot owner!</b>\n\n"
+        "We will review it and reply back to you here as soon as possible."
+    )
+
+
+@dp.callback_query(F.data.startswith("admin_reply_"))
+async def admin_reply_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    if not await is_primary_admin(callback_query.from_user.id):
+        await callback_query.answer("Primary Admin only.", show_alert=True)
+        return
+    
+    target_user_id = int(callback_query.data.split("_")[-1])
+    await state.set_state(ContactAdminForm.waiting_for_admin_reply)
+    await state.update_data(target_user_id=target_user_id)
+    
+    cancel_kbd = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Cancel Reply", callback_data="cancel_admin_reply")]
+    ])
+    await callback_query.message.reply(
+        f"✍️ <b>Replying to User <code>{target_user_id}</code>:</b>\n\n"
+        f"Please send the message you want to deliver to them below:",
+        reply_markup=cancel_kbd
+    )
+    await callback_query.answer()
+
+
+@dp.callback_query(F.data == "cancel_admin_reply")
+async def cancel_admin_reply_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback_query.message.edit_text("❌ Reply cancelled.")
+    await callback_query.answer("Cancelled")
+
+
+@dp.message(StateFilter(ContactAdminForm.waiting_for_admin_reply))
+async def handle_admin_reply_send(message: types.Message, state: FSMContext):
+    if not await is_primary_admin(message.from_user.id):
+        await state.clear()
+        return
+    
+    if message.text and message.text.startswith('/cancel'):
+        await state.clear()
+        await message.answer("❌ Reply cancelled.")
+        return
+    
+    data = await state.get_data()
+    target_user_id = data.get("target_user_id")
+    if not target_user_id:
+        await message.answer("⚠️ Target user ID missing. Please click 'Reply to User' again.")
+        await state.clear()
+        return
+    
+    user_msg = (
+        f"📩 <b>Response from Admin:</b>\n\n"
+        f"{html.quote(message.text or '')}"
+    )
+    
+    try:
+        await safe_send_message(target_user_id, user_msg)
+        await message.answer(f"✅ Reply delivered successfully to user <code>{target_user_id}</code>.")
+    except Exception as e:
+        await message.answer(f"❌ Failed to deliver reply to user: {e}")
+        
+    await state.clear()
+
 # --- Admin Commands ---
 
 # --- Giveaway Management & Channel Reaction Velocity Tracking ---
@@ -4751,6 +4886,7 @@ async def set_bot_commands():
         types.BotCommand(command="help", description="Help"),
         types.BotCommand(command="rules", description="Rules"),
         types.BotCommand(command="privacy", description="Privacy"),
+        types.BotCommand(command="contact_admin", description="Contact Admin / Support"),
         types.BotCommand(command="cancel", description="Cancel"),
         types.BotCommand(command="endchat", description="End chat"),
     ]
