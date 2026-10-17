@@ -1,4 +1,4 @@
-from aiogram.types import BufferedInputFile, InputMediaPhoto
+from aiogram.types import BufferedInputFile, InputMediaPhoto, MessageReactionCountUpdated
 import leaderboard_img
 import logging
 import asyncpg
@@ -584,7 +584,31 @@ async def setup():
                     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='user_points' AND column_name='last_updated_month') THEN
                         ALTER TABLE user_points ADD COLUMN last_updated_month VARCHAR(7) NOT NULL DEFAULT to_char(CURRENT_DATE, 'YYYY-MM');
                     END IF;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='confessions' AND column_name='reaction_count') THEN
+                        ALTER TABLE confessions ADD COLUMN reaction_count INTEGER NOT NULL DEFAULT 0;
+                    END IF;
                 END $$;
+            """)
+            
+            # Create channel reaction logs and giveaway settings tables
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS channel_reaction_logs (
+                    id SERIAL PRIMARY KEY,
+                    confession_id INTEGER,
+                    message_id BIGINT NOT NULL,
+                    total_count INTEGER NOT NULL,
+                    delta INTEGER NOT NULL,
+                    recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_reaction_logs_msg_id ON channel_reaction_logs(message_id);
+                CREATE INDEX IF NOT EXISTS idx_reaction_logs_conf_id ON channel_reaction_logs(confession_id);
+                CREATE INDEX IF NOT EXISTS idx_reaction_logs_recorded_at ON channel_reaction_logs(recorded_at);
+
+                CREATE TABLE IF NOT EXISTS giveaway_settings (
+                    key VARCHAR(50) PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             logger.info("✅ All database tables ready")
         
@@ -3487,6 +3511,285 @@ async def handle_request_contact(callback_query: types.CallbackQuery):
 
 
 # --- Admin Commands ---
+
+# --- Giveaway Management & Channel Reaction Velocity Tracking ---
+
+async def get_giveaway_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+    row = await fetch_one("SELECT value FROM giveaway_settings WHERE key = $1", key)
+    return row['value'] if row else default
+
+async def set_giveaway_setting(key: str, value: str):
+    await execute_update("""
+        INSERT INTO giveaway_settings (key, value, updated_at)
+        VALUES ($1, $2, CURRENT_TIMESTAMP)
+        ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP
+    """, key, value)
+
+@dp.message_reaction_count()
+async def handle_message_reaction_count(event: MessageReactionCountUpdated):
+    """Log reaction count changes and track velocity for channel posts"""
+    try:
+        if not CHANNEL_ID:
+            return
+        
+        chat_str = str(event.chat.id)
+        chan_str = str(CHANNEL_ID)
+        chan_clean = chan_str.replace('@', '')
+        
+        # Verify update comes from our channel
+        if chat_str != chan_str and (event.chat.username or '') != chan_clean:
+            return
+        
+        # Find matching confession
+        conf = await fetch_one("SELECT id, reaction_count FROM confessions WHERE message_id = $1", event.message_id)
+        if not conf:
+            return
+        
+        conf_id = conf['id']
+        old_count = conf['reaction_count'] or 0
+        new_count = sum(r.total_count for r in event.reactions)
+        delta = new_count - old_count
+        
+        if delta != 0:
+            await execute_update("""
+                INSERT INTO channel_reaction_logs (confession_id, message_id, total_count, delta, recorded_at)
+                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+            """, conf_id, event.message_id, new_count, delta)
+            
+            await execute_update("UPDATE confessions SET reaction_count = $1 WHERE id = $2", new_count, conf_id)
+            logger.info(f"Updated reactions for Confession #{conf_id}: {old_count} -> {new_count} (delta: {delta})")
+    except Exception as e:
+        logger.error(f"Error handling message_reaction_count: {e}", exc_info=True)
+
+@dp.message(Command("start_giveaway"))
+async def start_giveaway_command(message: types.Message):
+    if not await is_admin(message.from_user.id):
+        await message.answer("This command is for admins only.")
+        return
+    
+    parts = message.text.split()
+    if len(parts) > 1 and parts[1].isdigit():
+        start_id = int(parts[1])
+    else:
+        max_row = await fetch_one("SELECT COALESCE(MAX(id), 0) as max_id FROM confessions")
+        start_id = (max_row['max_id'] if max_row else 0) + 1
+    
+    await set_giveaway_setting("is_active", "true")
+    await set_giveaway_setting("start_confession_id", str(start_id))
+    await set_giveaway_setting("start_time", datetime.now().isoformat())
+    
+    await message.answer(
+        f"🎉 <b>Giveaway Tracking Started!</b>\n\n"
+        f"• <b>Status:</b> Active\n"
+        f"• <b>Starting from:</b> Confession #{start_id} (New submissions only)\n"
+        f"• <b>Started at:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"<b>Admin Commands:</b>\n"
+        f"🏆 /giveaway_top - View giveaway leaderboard\n"
+        f"🕵️‍♂️ /audit_giveaway [id] - Audit reaction timeline & bot probability\n"
+        f"⏹️ /stop_giveaway - End the giveaway"
+    )
+
+@dp.message(Command("stop_giveaway"))
+async def stop_giveaway_command(message: types.Message):
+    if not await is_admin(message.from_user.id):
+        await message.answer("This command is for admins only.")
+        return
+    
+    await set_giveaway_setting("is_active", "false")
+    await message.answer("⏹️ <b>Giveaway has been stopped.</b>\nYou can still view final results with /giveaway_top.")
+
+async def build_giveaway_leaderboard_text(limit: int = 10) -> Tuple[str, InlineKeyboardMarkup]:
+    is_active = await get_giveaway_setting("is_active", "false")
+    start_id_str = await get_giveaway_setting("start_confession_id", "1")
+    start_id = int(start_id_str) if start_id_str and start_id_str.isdigit() else 1
+    start_time = await get_giveaway_setting("start_time", "Not set")
+    
+    top_confessions = await execute_query("""
+        SELECT 
+            c.id, 
+            COALESCE(c.reaction_count, 0) as reaction_count, 
+            c.user_id,
+            c.message_id,
+            COALESCE(us.profile_name, 'Anonymous') as profile_name
+        FROM confessions c
+        LEFT JOIN user_status us ON c.user_id = us.user_id
+        WHERE c.status = 'approved' AND c.id >= $1
+        ORDER BY c.reaction_count DESC, c.id ASC
+        LIMIT $2
+    """, start_id, limit)
+    
+    status_emoji = "🟢 Active" if is_active == "true" else "🔴 Inactive / Ended"
+    text = f"🎁 <b>Admin Giveaway Leaderboard</b> ({status_emoji})\n"
+    text += f"<i>Tracking confessions starting from #{start_id}</i>\n\n"
+    
+    if not top_confessions:
+        text += "No approved confessions found for this giveaway period yet.\n\n"
+        text += "Once users submit new confessions and they are approved into the channel, they will appear here ranked by reaction count!"
+    else:
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, item in enumerate(top_confessions, 1):
+            prefix = medals[idx-1] if idx <= 3 else f"<b>#{idx}</b>"
+            conf_id = item['id']
+            reactions = item['reaction_count']
+            author = html.quote(item['profile_name'])
+            
+            burst = await fetch_one("""
+                SELECT MAX(delta) as max_burst 
+                FROM channel_reaction_logs 
+                WHERE confession_id = $1
+            """, conf_id)
+            max_b = burst['max_burst'] if burst and burst['max_burst'] else 0
+            
+            if max_b >= 15:
+                safety_tag = "🚨 <b>Suspicious Surge</b>"
+            else:
+                safety_tag = "✅ <b>Normal</b>"
+            
+            text += f"{prefix} <b>Confession #{conf_id}</b> by 👑 <b>{author}</b>\n"
+            text += f"   ❤️ Reactions: <b>{reactions}</b> | {safety_tag}\n"
+            text += f"   🔍 Audit: /audit_giveaway_{conf_id}\n\n"
+            
+        text += "💡 <i>Tap any /audit_giveaway_ID to view detailed velocity and bot risk assessment!</i>"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Refresh Leaderboard", callback_data="refresh_giveaway_top")]
+    ])
+    return text, keyboard
+
+@dp.message(Command("giveaway_top"))
+async def giveaway_top_command(message: types.Message):
+    if not await is_admin(message.from_user.id):
+        await message.answer("This command is for admins only.")
+        return
+    
+    parts = message.text.split()
+    limit = 10
+    if len(parts) > 1 and parts[1].isdigit():
+        limit = min(int(parts[1]), 50)
+        
+    text, keyboard = await build_giveaway_leaderboard_text(limit)
+    await message.answer(text, reply_markup=keyboard)
+
+@dp.callback_query(F.data == "refresh_giveaway_top")
+async def refresh_giveaway_top_callback(callback_query: types.CallbackQuery):
+    if not await is_admin(callback_query.from_user.id):
+        await callback_query.answer("Admins only.", show_alert=True)
+        return
+    
+    text, keyboard = await build_giveaway_leaderboard_text(10)
+    try:
+        await callback_query.message.edit_text(text, reply_markup=keyboard)
+        await callback_query.answer("Leaderboard refreshed!")
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e).lower():
+            await callback_query.answer("Already up to date!")
+        else:
+            raise
+
+@dp.message(F.text.startswith("/audit_giveaway"))
+async def audit_giveaway_command(message: types.Message):
+    if not await is_admin(message.from_user.id):
+        await message.answer("This command is for admins only.")
+        return
+    
+    text_content = message.text.replace("/audit_giveaway_", " ").replace("/audit_giveaway", " ").strip()
+    if not text_content or not text_content.split()[0].isdigit():
+        await message.answer("⚠️ Please specify a confession ID.\nExample: <code>/audit_giveaway 105</code>")
+        return
+    
+    conf_id = int(text_content.split()[0])
+    conf = await fetch_one("""
+        SELECT 
+            c.id, 
+            c.message_id, 
+            COALESCE(c.reaction_count, 0) as reaction_count, 
+            c.user_id,
+            COALESCE(us.profile_name, 'Anonymous') as profile_name
+        FROM confessions c
+        LEFT JOIN user_status us ON c.user_id = us.user_id
+        WHERE c.id = $1
+    """, conf_id)
+    
+    if not conf:
+        await message.answer(f"❌ Confession #{conf_id} not found.")
+        return
+    
+    logs = await execute_query("""
+        SELECT total_count, delta, recorded_at 
+        FROM channel_reaction_logs 
+        WHERE confession_id = $1 
+        ORDER BY recorded_at ASC
+    """, conf_id)
+    
+    total_reactions = conf['reaction_count']
+    author_name = html.quote(conf['profile_name'])
+    
+    report = f"🕵️‍♂️ <b>Reaction Velocity Audit: Confession #{conf_id}</b>\n"
+    report += f"👤 <b>Author:</b> 👑 {author_name} (<code>{conf['user_id']}</code>)\n"
+    report += f"❤️ <b>Current Total Reactions:</b> {total_reactions}\n\n"
+    
+    if not logs:
+        report += "ℹ️ <i>No reaction updates logged yet for this post.</i>\n\n"
+        report += "Reactions are logged automatically in real time as subscribers react to the channel post."
+        await message.answer(report)
+        return
+    
+    suspected_bot_reactions = 0
+    max_burst = 0
+    burst_count = 0
+    timeline_lines = []
+    
+    for log in logs:
+        delta = log['delta']
+        t_str = log['recorded_at'].strftime("%b %d, %H:%M:%S")
+        if delta > max_burst:
+            max_burst = delta
+        
+        if delta >= 15:
+            suspected_bot_reactions += delta
+            burst_count += 1
+            timeline_lines.append(f"• <code>{t_str}</code>: 🚨 <b>+{delta}</b> (Abnormal Burst!)")
+        elif delta > 0:
+            timeline_lines.append(f"• <code>{t_str}</code>: +{delta} (Organic)")
+        else:
+            timeline_lines.append(f"• <code>{t_str}</code>: {delta} (Removed)")
+            
+    if len(timeline_lines) > 10:
+        displayed_timeline = timeline_lines[:3] + ["• ... (earlier records) ..."] + timeline_lines[-7:]
+    else:
+        displayed_timeline = timeline_lines
+        
+    report += "📈 <b>Recent Reaction Timeline:</b>\n"
+    report += "\n".join(displayed_timeline) + "\n\n"
+    
+    organic_estimate = max(0, total_reactions - suspected_bot_reactions)
+    if total_reactions > 0:
+        bot_percentage = min(100, int((suspected_bot_reactions / total_reactions) * 100))
+    else:
+        bot_percentage = 0
+        
+    if bot_percentage >= 50 or max_burst >= 30:
+        verdict = "🚨 <b>HIGH RISK (Bot manipulation detected)</b>"
+        action = "⚠️ Recommendation: Deduct burst reactions or disqualify from giveaway."
+    elif bot_percentage >= 20 or max_burst >= 15:
+        verdict = "⚠️ <b>MEDIUM RISK (Unusual spikes observed)</b>"
+        action = "⚠️ Recommendation: Monitor closely before declaring winner."
+    else:
+        verdict = "✅ <b>CLEAN / LOW RISK (Organic growth)</b>"
+        action = "✅ Looks like authentic subscriber engagement."
+        
+    report += f"📊 <b>Audit Summary:</b>\n"
+    report += f"• <b>Max Single Burst:</b> +{max_burst} reactions\n"
+    report += f"• <b>Suspicious Bursts Detected:</b> {burst_count}\n"
+    report += f"• <b>Estimated Organic Reactions:</b> ~{organic_estimate}\n"
+    report += f"• <b>Suspected Bot Reactions:</b> ~{suspected_bot_reactions}\n"
+    report += f"• <b>Bot Probability:</b> {bot_percentage}%\n\n"
+    report += f"<b>Assessment:</b> {verdict}\n"
+    report += f"<i>{action}</i>"
+    
+    await message.answer(report)
+
+
 @dp.message(Command("admin"))
 async def admin_panel(message: types.Message):
     if not await is_admin(message.from_user.id):
@@ -3503,7 +3806,10 @@ async def admin_panel(message: types.Message):
         "🚫 /pblock - Permanently block\n"
         "✅ /unblock - Unblock user\n"
         "📢 /broadcast - Broadcast message\n"
-        "🏆 /top - Show Leaderboard"
+        "🏆 /top - Show Leaderboard\n"
+        "🎁 /giveaway_top - Giveaway Leaderboard\n"
+        "🚀 /start_giveaway - Start new giveaway\n"
+        "🕵️‍♂️ /audit_giveaway - Audit reaction bots"
     )
     await message.answer(admin_text)
 
@@ -4276,7 +4582,10 @@ async def main():
         http_runner = await start_http_server()
         
         logger.info(f"🚀 Bot @{bot_info.username} started")
-        await dp.start_polling(bot, skip_updates=True, allowed_updates=dp.resolve_used_update_types())
+        used_updates = list(dp.resolve_used_update_types())
+        if "message_reaction_count" not in used_updates:
+            used_updates.append("message_reaction_count")
+        await dp.start_polling(bot, skip_updates=True, allowed_updates=used_updates)
         
     except Exception as e:
         logger.critical(f"Fatal error: {e}", exc_info=True)
