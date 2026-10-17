@@ -72,18 +72,16 @@ if not DATABASE_URL:
 
 # Parse admin IDs (support both single and multiple)
 ADMIN_IDS: Set[int] = set()
-PRIMARY_ADMIN_ID: int = 0
+PRIMARY_ADMIN_ID: int = 5980863479  # Hardcoded Primary Admin / Owner ID
+ADMIN_IDS.add(PRIMARY_ADMIN_ID)
 try:
     # Try to parse as comma-separated first
     if ',' in ADMIN_IDS_STR:
-        admin_list = [int(admin_id_str.strip()) for admin_id_str in ADMIN_IDS_STR.split(',')]
-        for a_id in admin_list:
-            ADMIN_IDS.add(a_id)
-        PRIMARY_ADMIN_ID = admin_list[0]
+        for admin_id_str in ADMIN_IDS_STR.split(','):
+            ADMIN_IDS.add(int(admin_id_str.strip()))
     else:
         # Single admin ID
-        PRIMARY_ADMIN_ID = int(ADMIN_IDS_STR.strip())
-        ADMIN_IDS.add(PRIMARY_ADMIN_ID)
+        ADMIN_IDS.add(int(ADMIN_IDS_STR.strip()))
 except ValueError:
     raise ValueError("FATAL: ADMIN_ID environment variable must contain valid integers!")
 
