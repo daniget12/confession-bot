@@ -3728,18 +3728,7 @@ async def refresh_giveaway_top_callback(callback_query: types.CallbackQuery):
         else:
             raise
 
-@dp.message(F.text.startswith("/audit_giveaway"))
-async def audit_giveaway_command(message: types.Message):
-    if not await is_primary_admin(message.from_user.id):
-        await message.answer("⚠️ This command is restricted to the Primary Admin only.")
-        return
-    
-    text_content = message.text.replace("/audit_giveaway_", " ").replace("/audit_giveaway", " ").strip()
-    if not text_content or not text_content.split()[0].isdigit():
-        await message.answer("⚠️ Please specify a confession ID.\nExample: <code>/audit_giveaway 105</code>")
-        return
-    
-    conf_id = int(text_content.split()[0])
+async def build_audit_summary(conf_id: int) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
     conf = await fetch_one("""
         SELECT 
             c.id, 
@@ -3753,8 +3742,7 @@ async def audit_giveaway_command(message: types.Message):
     """, conf_id)
     
     if not conf:
-        await message.answer(f"❌ Confession #{conf_id} not found.")
-        return
+        return f"❌ Confession #{conf_id} not found.", None
     
     logs = await execute_query("""
         SELECT total_count, delta, recorded_at 
@@ -3766,14 +3754,205 @@ async def audit_giveaway_command(message: types.Message):
     total_reactions = conf['reaction_count']
     author_name = html.quote(conf['profile_name'])
     
-    report = f"🕵️‍♂️ <b>Reaction Velocity Audit: Confession #{conf_id}</b>\n"
-    report += f"👤 <b>Author:</b> 👑 {author_name} (<code>{conf['user_id']}</code>)\n"
-    report += f"❤️ <b>Current Total Reactions:</b> {total_reactions}\n\n"
+    report = (
+        f"🕵️‍♂️ <b>Reaction Velocity Audit: Confession #{conf_id}</b>\n"
+        f"👤 <b>Author:</b> 👑 {author_name} (<code>{conf['user_id']}</code>)\n"
+        f"❤️ <b>Current Total Reactions:</b> {total_reactions}\n\n"
+    )
     
     if not logs:
-        report += "ℹ️ <i>No reaction updates logged yet for this post.</i>\n\n"
-        report += "Reactions are logged automatically in real time as subscribers react to the channel post."
-        await message.answer(report)
+        report += (
+            "ℹ️ <i>No reaction updates logged yet for this post.</i>\n\n"
+            "Reactions are logged automatically in real time as subscribers react to the channel post."
+        )
+        return report, None
+    
+    suspected_bot_reactions = 0
+    max_burst = 0
+    burst_count = 0
+    timeline_lines = []
+    
+    for log in logs:
+        delta = log['delta']
+        t_str = log['recorded_at'].strftime("%b %d, %H:%M:%S")
+        if delta > max_burst:
+            max_burst = delta
+        
+        if delta >= 15:
+            suspected_bot_reactions += delta
+            burst_count += 1
+            timeline_lines.append(f"• <code>{t_str}</code>: 🚨 <b>+{delta}</b> (Abnormal Burst!)")
+        elif delta > 0:
+            timeline_lines.append(f"• <code>{t_str}</code>: +{delta} (Organic)")
+        else:
+            timeline_lines.append(f"• <code>{t_str}</code>: {delta} (Removed)")
+            
+    if len(timeline_lines) > 6:
+        displayed_timeline = timeline_lines[:2] + ["• ... (tap button below for each reaction time) ..."] + timeline_lines[-4:]
+    else:
+        displayed_timeline = timeline_lines
+        
+    report += "📈 <b>Recent Reaction Overview:</b>\n"
+    report += "\n".join(displayed_timeline) + "\n\n"
+    
+    organic_estimate = max(0, total_reactions - suspected_bot_reactions)
+    if total_reactions > 0:
+        bot_percentage = min(100, int((suspected_bot_reactions / total_reactions) * 100))
+    else:
+        bot_percentage = 0
+        
+    if bot_percentage >= 50 or max_burst >= 30:
+        verdict = "🚨 <b>HIGH RISK (Bot manipulation detected)</b>"
+        action = "⚠️ Recommendation: Deduct burst reactions or disqualify from giveaway."
+    elif bot_percentage >= 20 or max_burst >= 15:
+        verdict = "⚠️ <b>MEDIUM RISK (Unusual spikes observed)</b>"
+        action = "⚠️ Recommendation: Monitor closely before declaring winner."
+    else:
+        verdict = "✅ <b>CLEAN / LOW RISK (Organic growth)</b>"
+        action = "✅ Looks like authentic subscriber engagement."
+        
+    report += (
+        f"📊 <b>Audit Summary:</b>\n"
+        f"• <b>Total Logged Events:</b> {len(logs)}\n"
+        f"• <b>Max Single Burst:</b> +{max_burst} reactions\n"
+        f"• <b>Suspicious Bursts Detected:</b> {burst_count}\n"
+        f"• <b>Estimated Organic Reactions:</b> ~{organic_estimate}\n"
+        f"• <b>Suspected Bot Reactions:</b> ~{suspected_bot_reactions}\n"
+        f"• <b>Bot Probability:</b> {bot_percentage}%\n\n"
+        f"<b>Assessment:</b> {verdict}\n"
+        f"<i>{action}</i>"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🕒 View Reaction Times", callback_data=f"reaction_times_{conf_id}_1")]
+    ])
+    return report, keyboard
+
+
+async def build_reaction_times(conf_id: int, page: int = 1, page_size: int = 15) -> Tuple[str, InlineKeyboardMarkup]:
+    conf = await fetch_one("""
+        SELECT 
+            c.id, 
+            COALESCE(c.reaction_count, 0) as reaction_count, 
+            COALESCE(us.profile_name, 'Anonymous') as profile_name
+        FROM confessions c
+        LEFT JOIN user_status us ON c.user_id = us.user_id
+        WHERE c.id = $1
+    """, conf_id)
+    
+    logs = await execute_query("""
+        SELECT total_count, delta, recorded_at 
+        FROM channel_reaction_logs 
+        WHERE confession_id = $1 
+        ORDER BY recorded_at ASC
+    """, conf_id)
+    
+    author_name = html.quote(conf['profile_name']) if conf else "Unknown"
+    total_logs = len(logs) if logs else 0
+    total_pages = max(1, (total_logs + page_size - 1) // page_size)
+    page = max(1, min(page, total_pages))
+    
+    text = (
+        f"🕒 <b>Detailed Reaction Times: Confession #{conf_id}</b>\n"
+        f"👤 <b>Author:</b> 👑 {author_name} | ❤️ <b>Total Reactions:</b> {conf['reaction_count'] if conf else 0}\n"
+        f"📋 <b>Total Logged Events:</b> {total_logs}\n\n"
+    )
+    
+    if not logs:
+        text += "<i>No reaction records logged yet.</i>"
+    else:
+        start_idx = (page - 1) * page_size
+        end_idx = min(start_idx + page_size, total_logs)
+        page_logs = logs[start_idx:end_idx]
+        
+        for idx, item in enumerate(page_logs, start=start_idx + 1):
+            time_str = item['recorded_at'].strftime("%Y-%m-%d %H:%M:%S UTC")
+            delta = item['delta']
+            tot = item['total_count']
+            
+            if delta >= 15:
+                delta_str = f"🚨 <b>+{delta}</b> (BURST)"
+            elif delta > 0:
+                delta_str = f"+{delta}"
+            else:
+                delta_str = f"{delta}"
+                
+            text += f"<b>{idx}.</b> <code>{time_str}</code>\n    ➜ Change: {delta_str} | Count after: <b>{tot}</b>\n"
+            
+        text += f"\n<i>Page {page} of {total_pages}</i>"
+        
+    buttons = []
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"reaction_times_{conf_id}_{page-1}"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"reaction_times_{conf_id}_{page+1}"))
+    if nav_row:
+        buttons.append(nav_row)
+        
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Back to Summary", callback_data=f"back_to_audit_{conf_id}"),
+        InlineKeyboardButton(text="🔄 Refresh", callback_data=f"reaction_times_{conf_id}_{page}")
+    ])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    return text, keyboard
+
+
+@dp.message(F.text.startswith("/audit_giveaway"))
+async def audit_giveaway_command(message: types.Message):
+    if not await is_primary_admin(message.from_user.id):
+        await message.answer("⚠️ This command is restricted to the Primary Admin only.")
+        return
+    
+    text_content = message.text.replace("/audit_giveaway_", " ").replace("/audit_giveaway", " ").strip()
+    if not text_content or not text_content.split()[0].isdigit():
+        await message.answer("⚠️ Please specify a confession ID.\nExample: <code>/audit_giveaway 105</code>")
+        return
+    
+    conf_id = int(text_content.split()[0])
+    report, keyboard = await build_audit_summary(conf_id)
+    await message.answer(report, reply_markup=keyboard)
+
+
+@dp.callback_query(F.data.startswith("reaction_times_"))
+async def reaction_times_callback(callback_query: types.CallbackQuery):
+    if not await is_primary_admin(callback_query.from_user.id):
+        await callback_query.answer("Primary Admin only.", show_alert=True)
+        return
+    
+    parts = callback_query.data.split("_")
+    conf_id = int(parts[2])
+    page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
+    
+    text, keyboard = await build_reaction_times(conf_id, page)
+    try:
+        await callback_query.message.edit_text(text, reply_markup=keyboard)
+        await callback_query.answer()
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e).lower():
+            await callback_query.answer("Already up to date!")
+        else:
+            raise
+
+
+@dp.callback_query(F.data.startswith("back_to_audit_"))
+async def back_to_audit_callback(callback_query: types.CallbackQuery):
+    if not await is_primary_admin(callback_query.from_user.id):
+        await callback_query.answer("Primary Admin only.", show_alert=True)
+        return
+    
+    conf_id = int(callback_query.data.split("_")[-1])
+    report, keyboard = await build_audit_summary(conf_id)
+    try:
+        await callback_query.message.edit_text(report, reply_markup=keyboard)
+        await callback_query.answer()
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e).lower():
+            await callback_query.answer("Already up to date!")
+        else:
+            raise
+
         return
     
     suspected_bot_reactions = 0
