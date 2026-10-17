@@ -72,14 +72,18 @@ if not DATABASE_URL:
 
 # Parse admin IDs (support both single and multiple)
 ADMIN_IDS: Set[int] = set()
+PRIMARY_ADMIN_ID: int = 0
 try:
     # Try to parse as comma-separated first
     if ',' in ADMIN_IDS_STR:
-        for admin_id_str in ADMIN_IDS_STR.split(','):
-            ADMIN_IDS.add(int(admin_id_str.strip()))
+        admin_list = [int(admin_id_str.strip()) for admin_id_str in ADMIN_IDS_STR.split(',')]
+        for a_id in admin_list:
+            ADMIN_IDS.add(a_id)
+        PRIMARY_ADMIN_ID = admin_list[0]
     else:
         # Single admin ID
-        ADMIN_IDS.add(int(ADMIN_IDS_STR))
+        PRIMARY_ADMIN_ID = int(ADMIN_IDS_STR.strip())
+        ADMIN_IDS.add(PRIMARY_ADMIN_ID)
 except ValueError:
     raise ValueError("FATAL: ADMIN_ID environment variable must contain valid integers!")
 
@@ -227,6 +231,10 @@ async def execute_insert_return_id(query: str, *params):
 async def is_admin(user_id: int) -> bool:
     """Check if user is admin"""
     return user_id in ADMIN_IDS
+
+async def is_primary_admin(user_id: int) -> bool:
+    """Check if user is the primary (1st) admin / owner"""
+    return user_id == PRIMARY_ADMIN_ID
 
 async def get_profile_name(user_id: int) -> str:
     """Get user's profile name with caching"""
@@ -3563,8 +3571,8 @@ async def handle_message_reaction_count(event: MessageReactionCountUpdated):
 
 @dp.message(Command("start_giveaway"))
 async def start_giveaway_command(message: types.Message):
-    if not await is_admin(message.from_user.id):
-        await message.answer("This command is for admins only.")
+    if not await is_primary_admin(message.from_user.id):
+        await message.answer("⚠️ This command is restricted to the Primary Admin only.")
         return
     
     parts = message.text.split()
@@ -3591,8 +3599,8 @@ async def start_giveaway_command(message: types.Message):
 
 @dp.message(Command("stop_giveaway"))
 async def stop_giveaway_command(message: types.Message):
-    if not await is_admin(message.from_user.id):
-        await message.answer("This command is for admins only.")
+    if not await is_primary_admin(message.from_user.id):
+        await message.answer("⚠️ This command is restricted to the Primary Admin only.")
         return
     
     await set_giveaway_setting("is_active", "false")
@@ -3658,8 +3666,8 @@ async def build_giveaway_leaderboard_text(limit: int = 10) -> Tuple[str, InlineK
 
 @dp.message(Command("giveaway_top"))
 async def giveaway_top_command(message: types.Message):
-    if not await is_admin(message.from_user.id):
-        await message.answer("This command is for admins only.")
+    if not await is_primary_admin(message.from_user.id):
+        await message.answer("⚠️ This command is restricted to the Primary Admin only.")
         return
     
     parts = message.text.split()
@@ -3672,8 +3680,8 @@ async def giveaway_top_command(message: types.Message):
 
 @dp.callback_query(F.data == "refresh_giveaway_top")
 async def refresh_giveaway_top_callback(callback_query: types.CallbackQuery):
-    if not await is_admin(callback_query.from_user.id):
-        await callback_query.answer("Admins only.", show_alert=True)
+    if not await is_primary_admin(callback_query.from_user.id):
+        await callback_query.answer("Primary Admin only.", show_alert=True)
         return
     
     text, keyboard = await build_giveaway_leaderboard_text(10)
@@ -3688,8 +3696,8 @@ async def refresh_giveaway_top_callback(callback_query: types.CallbackQuery):
 
 @dp.message(F.text.startswith("/audit_giveaway"))
 async def audit_giveaway_command(message: types.Message):
-    if not await is_admin(message.from_user.id):
-        await message.answer("This command is for admins only.")
+    if not await is_primary_admin(message.from_user.id):
+        await message.answer("⚠️ This command is restricted to the Primary Admin only.")
         return
     
     text_content = message.text.replace("/audit_giveaway_", " ").replace("/audit_giveaway", " ").strip()
@@ -3806,11 +3814,16 @@ async def admin_panel(message: types.Message):
         "🚫 /pblock - Permanently block\n"
         "✅ /unblock - Unblock user\n"
         "📢 /broadcast - Broadcast message\n"
-        "🏆 /top - Show Leaderboard\n"
-        "🎁 /giveaway_top - Giveaway Leaderboard\n"
-        "🚀 /start_giveaway - Start new giveaway\n"
-        "🕵️‍♂️ /audit_giveaway - Audit reaction bots"
+        "🏆 /top - Show Leaderboard"
     )
+    if await is_primary_admin(message.from_user.id):
+        admin_text += (
+            "\n\n<b>🎁 Giveaway (Primary Admin Only):</b>\n"
+            "🏆 /giveaway_top - Giveaway Leaderboard\n"
+            "🚀 /start_giveaway - Start new giveaway\n"
+            "🕵️‍♂️ /audit_giveaway - Audit reaction bots\n"
+            "⏹️ /stop_giveaway - Stop giveaway"
+        )
     await message.answer(admin_text)
 
 @dp.message(Command("stats"))
