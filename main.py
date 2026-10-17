@@ -3787,27 +3787,42 @@ async def build_giveaway_leaderboard_text(limit: int = 10) -> Tuple[str, InlineK
             COALESCE(c.reaction_count, 0) as reaction_count, 
             c.user_id,
             c.message_id,
-            COALESCE(us.profile_name, 'Anonymous') as profile_name
+            COALESCE(us.profile_name, 'Anonymous') as profile_name,
+            COALESCE(comm.comment_count, 0) as comment_count,
+            (COALESCE(c.reaction_count, 0) + (COALESCE(comm.comment_count, 0) * 2)) as giveaway_points
         FROM confessions c
         LEFT JOIN user_status us ON c.user_id = us.user_id
+        LEFT JOIN (
+            SELECT confession_id, COUNT(*) as comment_count 
+            FROM comments 
+            GROUP BY confession_id
+        ) comm ON c.id = comm.confession_id
         WHERE c.status = 'approved' AND c.id >= $1
-        ORDER BY c.reaction_count DESC, c.id ASC
+        ORDER BY giveaway_points DESC, c.reaction_count DESC, c.id ASC
         LIMIT $2
     """, start_id, limit)
     
     status_emoji = "🟢 Active" if is_active == "true" else "🔴 Inactive / Ended"
-    text = f"🎁 <b>Admin Giveaway Leaderboard</b> ({status_emoji})\n"
-    text += f"<i>Tracking confessions starting from #{start_id}</i>\n\n"
+    text = (
+        f"🎁 <b>Admin Giveaway Leaderboard</b> ({status_emoji})\n"
+        f"<i>Tracking confessions starting from #{start_id}</i>\n"
+        f"📊 <i>Scoring: 1 Channel Reaction = 1 Pt | 1 Comment = 2 Pts</i>\n\n"
+    )
     
     if not top_confessions:
-        text += "No approved confessions found for this giveaway period yet.\n\n"
-        text += "Once users submit new confessions and they are approved into the channel, they will appear here ranked by reaction count!"
+        text += (
+            "No approved confessions found for this giveaway period yet.\n\n"
+            "Once users submit new confessions and they are approved into the channel, "
+            "they will appear here ranked by total giveaway points!"
+        )
     else:
         medals = ["🥇", "🥈", "🥉"]
         for idx, item in enumerate(top_confessions, 1):
             prefix = medals[idx-1] if idx <= 3 else f"<b>#{idx}</b>"
             conf_id = item['id']
             reactions = item['reaction_count']
+            comments = item['comment_count']
+            points = item['giveaway_points']
             author = html.quote(item['profile_name'])
             
             burst = await fetch_one("""
@@ -3823,8 +3838,8 @@ async def build_giveaway_leaderboard_text(limit: int = 10) -> Tuple[str, InlineK
                 safety_tag = "✅ <b>Normal</b>"
             
             text += f"{prefix} <b>Confession #{conf_id}</b> by 👑 <b>{author}</b>\n"
-            text += f"   ❤️ Reactions: <b>{reactions}</b> | {safety_tag}\n"
-            text += f"   🔍 Audit: /audit_giveaway_{conf_id}\n\n"
+            text += f"   🏆 <b>{points} pts</b> (❤️ {reactions} likes + 💬 {comments} comments)\n"
+            text += f"   Status: {safety_tag} | 🔍 /audit_giveaway_{conf_id}\n\n"
             
         text += "💡 <i>Tap any /audit_giveaway_ID to view detailed velocity and bot risk assessment!</i>"
     
@@ -3886,21 +3901,41 @@ async def build_audit_summary(conf_id: int) -> Tuple[str, Optional[InlineKeyboar
         ORDER BY recorded_at ASC
     """, conf_id)
     
+    comm_stats = await fetch_one("""
+        SELECT 
+            COUNT(*) as total_comments,
+            COUNT(DISTINCT user_id) as unique_commenters
+        FROM comments 
+        WHERE confession_id = $1
+    """, conf_id)
+    total_comments = comm_stats['total_comments'] if comm_stats else 0
+    unique_commenters = comm_stats['unique_commenters'] if comm_stats else 0
+    comment_points = total_comments * 2
+    
     total_reactions = conf['reaction_count']
+    giveaway_points = total_reactions + comment_points
     author_name = html.quote(conf['profile_name'])
     
     report = (
-        f"🕵️‍♂️ <b>Reaction Velocity Audit: Confession #{conf_id}</b>\n"
+        f"🕵️‍♂️ <b>Giveaway Audit: Confession #{conf_id}</b>\n"
         f"👤 <b>Author:</b> 👑 {author_name} (<code>{conf['user_id']}</code>)\n"
-        f"❤️ <b>Current Total Reactions:</b> {total_reactions}\n\n"
+        f"🏆 <b>Total Giveaway Score:</b> <b>{giveaway_points} pts</b>\n"
+        f"   • ❤️ Channel Reactions: {total_reactions} pts (1 pt each)\n"
+        f"   • 💬 Comments: {total_comments} (={comment_points} pts from {unique_commenters} users)\n\n"
     )
+    
+    if total_comments > 5 and unique_commenters == 1:
+        report += "⚠️ <i>Note: All comments were made by a single user (potential self-boost)!</i>\n\n"
     
     if not logs:
         report += (
             "ℹ️ <i>No reaction updates logged yet for this post.</i>\n\n"
             "Reactions are logged automatically in real time as subscribers react to the channel post."
         )
-        return report, None
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🕒 View Reaction Times", callback_data=f"reaction_times_{conf_id}_1")]
+        ])
+        return report, keyboard
     
     suspected_bot_reactions = 0
     max_burst = 0
@@ -3982,6 +4017,11 @@ async def build_reaction_times(conf_id: int, page: int = 1, page_size: int = 15)
         ORDER BY recorded_at ASC
     """, conf_id)
     
+    comm_count_row = await fetch_one("SELECT COUNT(*) as count FROM comments WHERE confession_id = $1", conf_id)
+    total_comments = comm_count_row['count'] if comm_count_row else 0
+    total_reactions = conf['reaction_count'] if conf else 0
+    giveaway_points = total_reactions + (total_comments * 2)
+    
     author_name = html.quote(conf['profile_name']) if conf else "Unknown"
     total_logs = len(logs) if logs else 0
     total_pages = max(1, (total_logs + page_size - 1) // page_size)
@@ -3989,7 +4029,8 @@ async def build_reaction_times(conf_id: int, page: int = 1, page_size: int = 15)
     
     text = (
         f"🕒 <b>Detailed Reaction Times: Confession #{conf_id}</b>\n"
-        f"👤 <b>Author:</b> 👑 {author_name} | ❤️ <b>Total Reactions:</b> {conf['reaction_count'] if conf else 0}\n"
+        f"👤 <b>Author:</b> 👑 {author_name} | 🏆 <b>{giveaway_points} pts</b>\n"
+        f"❤️ Reactions: {total_reactions} | 💬 Comments: {total_comments} (worth {total_comments * 2} pts)\n"
         f"📋 <b>Total Logged Events:</b> {total_logs}\n\n"
     )
     
@@ -4032,7 +4073,6 @@ async def build_reaction_times(conf_id: int, page: int = 1, page_size: int = 15)
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return text, keyboard
-
 
 @dp.message(F.text.startswith("/audit_giveaway"))
 async def audit_giveaway_command(message: types.Message):
