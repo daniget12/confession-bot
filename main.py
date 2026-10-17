@@ -3601,8 +3601,44 @@ async def stop_giveaway_command(message: types.Message):
         await message.answer("⚠️ This command is restricted to the Primary Admin only.")
         return
     
+    is_active = await get_giveaway_setting("is_active", "false")
+    if is_active != "true":
+        await message.answer("ℹ️ There is no active giveaway running right now.")
+        return
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Yes, Stop Giveaway", callback_data="confirm_stop_giveaway"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_stop_giveaway")
+        ]
+    ])
+    await message.answer(
+        "⚠️ <b>Are you sure you want to stop the giveaway?</b>\n\n"
+        "This will finalize the giveaway tracking. You will still be able to audit and view the final rankings via /giveaway_top.",
+        reply_markup=keyboard
+    )
+
+@dp.callback_query(F.data == "confirm_stop_giveaway")
+async def confirm_stop_giveaway_callback(callback_query: types.CallbackQuery):
+    if not await is_primary_admin(callback_query.from_user.id):
+        await callback_query.answer("Primary Admin only.", show_alert=True)
+        return
+    
     await set_giveaway_setting("is_active", "false")
-    await message.answer("⏹️ <b>Giveaway has been stopped.</b>\nYou can still view final results with /giveaway_top.")
+    await callback_query.message.edit_text(
+        "⏹️ <b>Giveaway has been officially stopped.</b>\n\n"
+        "You can view the final leaderboard and audit entries using /giveaway_top."
+    )
+    await callback_query.answer("Giveaway stopped!")
+
+@dp.callback_query(F.data == "cancel_stop_giveaway")
+async def cancel_stop_giveaway_callback(callback_query: types.CallbackQuery):
+    if not await is_primary_admin(callback_query.from_user.id):
+        await callback_query.answer("Primary Admin only.", show_alert=True)
+        return
+    
+    await callback_query.message.edit_text("❌ <b>Action cancelled.</b>\nThe giveaway remains active and continues tracking reactions.")
+    await callback_query.answer("Cancelled.")
 
 async def build_giveaway_leaderboard_text(limit: int = 10) -> Tuple[str, InlineKeyboardMarkup]:
     is_active = await get_giveaway_setting("is_active", "false")
