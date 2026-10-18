@@ -1738,16 +1738,22 @@ async def change_profile_name_start(callback_query: types.CallbackQuery, state: 
 
 @dp.message(UserProfileForm.waiting_for_profile_name, F.text)
 async def receive_profile_name(message: types.Message, state: FSMContext):
-    profile_name = message.text.strip()
+    # Normalize whitespace while supporting all languages (Amharic, Oromo, Arabic, English, Emojis, etc.)
+    profile_name = " ".join(message.text.strip().split())
+    
+    if profile_name.startswith('/'):
+        if profile_name.lower() in ['/cancel', '/start']:
+            await state.clear()
+            await message.answer("❌ Display name change cancelled.")
+            return
+        await message.answer("Display name cannot start with a slash (/). Please enter a valid name or type /cancel:")
+        return
     
     if len(profile_name) > 32:
         await message.answer("Profile name too long. Maximum 32 characters. Please try again:")
         return
     if len(profile_name) < 2:
         await message.answer("Profile name too short. Minimum 2 characters. Please try again:")
-        return
-    if not re.match(r'^[a-zA-Z0-9_ ]+$', profile_name):
-        await message.answer("Profile name can only contain letters, numbers, spaces and underscores. Please try again:")
         return
     
     await execute_update(
