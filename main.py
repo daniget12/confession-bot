@@ -1229,7 +1229,10 @@ async def start(message: types.Message, state: FSMContext, command: Optional[Com
 
     deep_link_args = command.args if command else None
     if deep_link_args:
-        if deep_link_args.startswith("view_"):
+        if deep_link_args in ["contact_admin", "support", "contact"]:
+            await contact_admin_start(message, state)
+            return
+        elif deep_link_args.startswith("view_"):
             try:
                 conf_id = int(deep_link_args.split("_", 1)[1])
                 conf_data = await fetch_one("""
@@ -4431,6 +4434,9 @@ async def handle_menu_buttons(message: types.Message, state: FSMContext):
     
     elif button_text == "Cancel":
         await cancel_command(message, state)
+    
+    elif button_text == "Contact Admin":
+        await contact_admin_start(message, state)
     
     elif button_text == "Admin Panel" and await is_admin(message.from_user.id):
         await admin_panel(message)
