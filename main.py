@@ -3784,13 +3784,11 @@ async def cancel_stop_giveaway_callback(callback_query: types.CallbackQuery):
     await callback_query.message.edit_text("❌ <b>Action cancelled.</b>\nThe giveaway remains active and continues tracking reactions.")
     await callback_query.answer("Cancelled.")
 
-async def build_giveaway_leaderboard_text(limit: int = 10) -> Tuple[str, InlineKeyboardMarkup]:
-    is_active = await get_giveaway_setting("is_active", "false")
+async def get_top_giveaway_confessions(limit: int = 10):
     start_id_str = await get_giveaway_setting("start_confession_id", "1")
     start_id = int(start_id_str) if start_id_str and start_id_str.isdigit() else 1
-    start_time = await get_giveaway_setting("start_time", "Not set")
     
-    top_confessions = await execute_query("""
+    return await execute_query("""
         SELECT 
             c.id, 
             COALESCE(c.reaction_count, 0) as reaction_count, 
@@ -3810,6 +3808,14 @@ async def build_giveaway_leaderboard_text(limit: int = 10) -> Tuple[str, InlineK
         ORDER BY giveaway_points DESC, c.reaction_count DESC, c.id ASC
         LIMIT $2
     """, start_id, limit)
+
+
+async def build_giveaway_leaderboard_text(limit: int = 10) -> Tuple[str, InlineKeyboardMarkup]:
+    is_active = await get_giveaway_setting("is_active", "false")
+    start_id_str = await get_giveaway_setting("start_confession_id", "1")
+    start_id = int(start_id_str) if start_id_str and start_id_str.isdigit() else 1
+    
+    top_confessions = await get_top_giveaway_confessions(limit)
     
     status_emoji = "🟢 Active" if is_active == "true" else "🔴 Inactive / Ended"
     text = (
@@ -3853,9 +3859,28 @@ async def build_giveaway_leaderboard_text(limit: int = 10) -> Tuple[str, InlineK
         text += "💡 <i>Tap any /audit_giveaway_ID to view detailed velocity and bot risk assessment!</i>"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Refresh Leaderboard", callback_data="refresh_giveaway_top")]
+        [
+            InlineKeyboardButton(text="🖼️ View Graphic", callback_data="giveaway_top_graphic"),
+            InlineKeyboardButton(text="🔄 Refresh Text", callback_data="giveaway_top_text")
+        ],
+        [
+            InlineKeyboardButton(text="📢 Post to Channel", callback_data="pre_post_giveaway_top")
+        ]
     ])
     return text, keyboard
+
+
+def get_giveaway_graphic_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔄 Refresh", callback_data="refresh_giveaway_top"),
+            InlineKeyboardButton(text="📋 Text & Audits", callback_data="giveaway_top_text")
+        ],
+        [
+            InlineKeyboardButton(text="📢 Post to Channel", callback_data="pre_post_giveaway_top")
+        ]
+    ])
+
 
 @dp.message(Command("giveaway_top"))
 async def giveaway_top_command(message: types.Message):
@@ -3868,8 +3893,12 @@ async def giveaway_top_command(message: types.Message):
     if len(parts) > 1 and parts[1].isdigit():
         limit = min(int(parts[1]), 50)
         
-    text, keyboard = await build_giveaway_leaderboard_text(limit)
-    await message.answer(text, reply_markup=keyboard)
+    top_confessions = await get_top_giveaway_confessions(limit)
+    bio = leaderboard_img.generate_giveaway_image(top_confessions)
+    photo = BufferedInputFile(bio.getvalue(), filename="giveaway_leaderboard.png")
+    
+    await message.answer_photo(photo=photo, reply_markup=get_giveaway_graphic_keyboard())
+
 
 @dp.callback_query(F.data == "refresh_giveaway_top")
 async def refresh_giveaway_top_callback(callback_query: types.CallbackQuery):
@@ -3877,15 +3906,137 @@ async def refresh_giveaway_top_callback(callback_query: types.CallbackQuery):
         await callback_query.answer("Primary Admin only.", show_alert=True)
         return
     
-    text, keyboard = await build_giveaway_leaderboard_text(10)
+    top_confessions = await get_top_giveaway_confessions(10)
+    bio = leaderboard_img.generate_giveaway_image(top_confessions)
+    photo = BufferedInputFile(bio.getvalue(), filename="giveaway_leaderboard.png")
+    
     try:
-        await callback_query.message.edit_text(text, reply_markup=keyboard)
+        media = InputMediaPhoto(media=photo)
+        await callback_query.message.edit_media(media=media, reply_markup=get_giveaway_graphic_keyboard())
         await callback_query.answer("Leaderboard refreshed!")
     except TelegramBadRequest as e:
         if "message is not modified" in str(e).lower():
             await callback_query.answer("Already up to date!")
         else:
             raise
+
+
+@dp.callback_query(F.data == "giveaway_top_text")
+async def giveaway_top_text_callback(callback_query: types.CallbackQuery):
+    if not await is_primary_admin(callback_query.from_user.id):
+        await callback_query.answer("Primary Admin only.", show_alert=True)
+        return
+    
+    text, keyboard = await build_giveaway_leaderboard_text(10)
+    try:
+        await callback_query.message.delete()
+    except Exception:
+        pass
+    await callback_query.message.answer(text, reply_markup=keyboard)
+    await callback_query.answer()
+
+
+@dp.callback_query(F.data == "giveaway_top_graphic")
+async def giveaway_top_graphic_callback(callback_query: types.CallbackQuery):
+    if not await is_primary_admin(callback_query.from_user.id):
+        await callback_query.answer("Primary Admin only.", show_alert=True)
+        return
+    
+    top_confessions = await get_top_giveaway_confessions(10)
+    bio = leaderboard_img.generate_giveaway_image(top_confessions)
+    photo = BufferedInputFile(bio.getvalue(), filename="giveaway_leaderboard.png")
+    
+    try:
+        await callback_query.message.delete()
+    except Exception:
+        pass
+    await callback_query.message.answer_photo(photo=photo, reply_markup=get_giveaway_graphic_keyboard())
+    await callback_query.answer()
+
+
+@dp.message(Command("post_giveaway_top"))
+async def post_giveaway_top_command(message: types.Message):
+    if not await is_primary_admin(message.from_user.id):
+        await message.answer("⚠️ This command is restricted to the Primary Admin only.")
+        return
+    
+    confirm_kbd = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Yes, Post to Channel", callback_data="do_post_giveaway_top"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_post_giveaway_top")
+        ]
+    ])
+    await message.answer(
+        "📢 <b>Post Giveaway Leaderboard to Channel?</b>\n\n"
+        "This will generate the latest standings graphic and post it directly to the confessions channel to notify all subscribers!",
+        reply_markup=confirm_kbd
+    )
+
+
+@dp.callback_query(F.data == "pre_post_giveaway_top")
+async def pre_post_giveaway_top_callback(callback_query: types.CallbackQuery):
+    if not await is_primary_admin(callback_query.from_user.id):
+        await callback_query.answer("Primary Admin only.", show_alert=True)
+        return
+    
+    confirm_kbd = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Yes, Post to Channel", callback_data="do_post_giveaway_top"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_post_giveaway_top")
+        ]
+    ])
+    await callback_query.message.reply(
+        "📢 <b>Post Giveaway Leaderboard to Channel?</b>\n\n"
+        "This will generate the latest standings graphic and post it directly to the confessions channel to notify all subscribers!",
+        reply_markup=confirm_kbd
+    )
+    await callback_query.answer()
+
+
+@dp.callback_query(F.data == "do_post_giveaway_top")
+async def do_post_giveaway_top_callback(callback_query: types.CallbackQuery):
+    if not await is_primary_admin(callback_query.from_user.id):
+        await callback_query.answer("Primary Admin only.", show_alert=True)
+        return
+    
+    if not CHANNEL_ID:
+        await callback_query.answer("CHANNEL_ID not set!", show_alert=True)
+        return
+    
+    top_confessions = await get_top_giveaway_confessions(10)
+    bio = leaderboard_img.generate_giveaway_image(top_confessions)
+    photo = BufferedInputFile(bio.getvalue(), filename="giveaway_leaderboard.png")
+    
+    caption = (
+        "🎁 <b>1,000 Users Milestone Giveaway - Current Standings!</b> 🏆\n\n"
+        "Here are the top confessions currently leading the race!\n"
+        "Keep reacting and commenting to push your favorites to the top.\n\n"
+        "🥇 1st Place: <b>250 ETB</b>\n"
+        "🥈 2nd Place: <b>150 ETB</b>\n"
+        "🥉 3rd Place: <b>100 ETB</b>\n\n"
+        "<i>📊 1 Channel Reaction = 1 Pt | 1 Comment = 2 Pts</i>"
+    )
+    channel_kbd = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🕊️ Confess & Join", url=f"https://t.me/{bot_info.username}?start=confess"),
+            InlineKeyboardButton(text="📩 Contact Admin", url=f"https://t.me/{bot_info.username}?start=contact_admin")
+        ]
+    ])
+    
+    try:
+        await bot.send_photo(chat_id=CHANNEL_ID, photo=photo, caption=caption, reply_markup=channel_kbd)
+        await callback_query.message.edit_text("✅ <b>Giveaway leaderboard graphic has been posted to the channel!</b>")
+        await callback_query.answer("Posted to channel!")
+    except Exception as e:
+        logger.error(f"Failed to post giveaway leaderboard to channel: {e}", exc_info=True)
+        await callback_query.message.edit_text(f"❌ Failed to post to channel: {e}")
+        await callback_query.answer("Failed to post.", show_alert=True)
+
+
+@dp.callback_query(F.data == "cancel_post_giveaway_top")
+async def cancel_post_giveaway_top_callback(callback_query: types.CallbackQuery):
+    await callback_query.message.edit_text("❌ Channel post cancelled.")
+    await callback_query.answer("Cancelled")
 
 async def build_audit_summary(conf_id: int) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
     conf = await fetch_one("""
@@ -4216,7 +4367,7 @@ async def admin_panel(message: types.Message):
     if await is_primary_admin(message.from_user.id):
         admin_text += (
             "\n\n<b>🎁 Giveaway (Primary Admin Only):</b>\n"
-            "🏆 /giveaway_top - Giveaway Leaderboard\n"
+            "🏆 /giveaway_top - Giveaway Graphic Leaderboard\n            📢 /post_giveaway_top - Post leaderboard to channel\n"
             "🚀 /start_giveaway - Start new giveaway\n"
             "🕵️‍♂️ /audit_giveaway - Audit reaction bots\n"
             "⏹️ /stop_giveaway - Stop giveaway"
