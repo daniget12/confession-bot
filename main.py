@@ -3819,7 +3819,7 @@ async def build_giveaway_leaderboard_text(limit: int = 10) -> Tuple[str, InlineK
     
     status_emoji = "🟢 Active" if is_active == "true" else "🔴 Inactive / Ended"
     text = (
-        f"🎁 <b>Admin Giveaway Leaderboard</b> ({status_emoji})\n"
+        f"🎁 <b>Giveaway Leaderboard</b> ({status_emoji})\n"
         f"<i>Tracking confessions starting from #{start_id}</i>\n"
         f"📊 <i>Scoring: 1 Channel Reaction = 1 Pt | 1 Comment = 2 Pts</i>\n\n"
     )
@@ -3838,7 +3838,6 @@ async def build_giveaway_leaderboard_text(limit: int = 10) -> Tuple[str, InlineK
             reactions = item['reaction_count']
             comments = item['comment_count']
             points = item['giveaway_points']
-            author = html.quote(item['profile_name'])
             
             burst = await fetch_one("""
                 SELECT MAX(delta) as max_burst 
@@ -3852,7 +3851,7 @@ async def build_giveaway_leaderboard_text(limit: int = 10) -> Tuple[str, InlineK
             else:
                 safety_tag = "✅ <b>Normal</b>"
             
-            text += f"{prefix} <b>Confession #{conf_id}</b> by 👑 <b>{author}</b>\n"
+            text += f"{prefix} <b>Confession #{conf_id}</b>\n"
             text += f"   🏆 <b>{points} pts</b> (❤️ {reactions} likes + 💬 {comments} comments)\n"
             text += f"   Status: {safety_tag} | 🔍 /audit_giveaway_{conf_id}\n\n"
             
@@ -4007,15 +4006,7 @@ async def do_post_giveaway_top_callback(callback_query: types.CallbackQuery):
     bio = leaderboard_img.generate_giveaway_image(top_confessions)
     photo = BufferedInputFile(bio.getvalue(), filename="giveaway_leaderboard.png")
     
-    caption = (
-        "🎁 <b>1,000 Users Milestone Giveaway - Current Standings!</b> 🏆\n\n"
-        "Here are the top confessions currently leading the race!\n"
-        "Keep reacting and commenting to push your favorites to the top.\n\n"
-        "🥇 1st Place: <b>250 ETB</b>\n"
-        "🥈 2nd Place: <b>150 ETB</b>\n"
-        "🥉 3rd Place: <b>100 ETB</b>\n\n"
-        "<i>📊 1 Channel Reaction = 1 Pt | 1 Comment = 2 Pts</i>"
-    )
+    caption = "🎁 <b>Giveaway Leaderboard</b>"
     channel_kbd = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🕊️ Confess & Join", url=f"https://t.me/{bot_info.username}?start=confess"),

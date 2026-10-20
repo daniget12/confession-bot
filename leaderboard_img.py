@@ -158,14 +158,11 @@ def generate_giveaway_image(top_confessions):
             pilmoji.text((padding + 18, row_y + 20), rank_text, fill=text_primary, font=name_font)
             
             cid = item.get('id', 0)
-            pname = item.get('profile_name', 'Anonymous')
             if cid > 0:
-                title_line = f"Confession #{cid} - {pname}"
+                title_line = f"Confession #{cid}"
             else:
-                title_line = pname
+                title_line = "No entries yet"
                 
-            if len(title_line) > 28:
-                title_line = title_line[:26] + "..."
             pilmoji.text((padding + 85, row_y + 14), title_line, fill=text_primary, font=name_font)
             
             rcnt = item.get('reaction_count', 0)
