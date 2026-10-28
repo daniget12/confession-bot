@@ -96,7 +96,10 @@ logger = logging.getLogger(__name__)
 # Bot and Dispatcher
 bot = Bot(
     token=BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    default=DefaultBotProperties(
+        parse_mode=ParseMode.HTML,
+        link_preview_is_disabled=True
+    )
 )
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -1119,7 +1122,8 @@ async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, co
             text_msg = await bot.send_message(
                 user_id, 
                 text_content, 
-                reply_markup=keyboard
+                reply_markup=keyboard,
+                disable_web_page_preview=True
             )
             sent_message = text_msg
             
@@ -1136,7 +1140,8 @@ async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, co
             text_msg = await bot.send_message(
                 user_id, 
                 text_content, 
-                reply_markup=keyboard
+                reply_markup=keyboard,
+                disable_web_page_preview=True
             )
             sent_message = text_msg
             
