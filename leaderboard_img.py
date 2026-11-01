@@ -2,6 +2,31 @@ import os
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from pilmoji import Pilmoji
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def get_font(size: int):
+    """Load a font that supports Latin and non-Latin scripts (Ethiopic/Amharic, Arabic, Cyrillic, etc.) with fallbacks."""
+    candidate_paths = [
+        os.path.join(BASE_DIR, "Poppins-Universal.ttf"),
+        os.path.join(BASE_DIR, "Poppins-SemiBold.ttf"),
+        "Poppins-Universal.ttf",
+        "Poppins-SemiBold.ttf",
+        "C:\\Windows\\Fonts\\ebrimabd.ttf",
+        "C:\\Windows\\Fonts\\ebrima.ttf",
+        "C:\\Windows\\Fonts\\nyala.ttf",
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansEthiopic-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    ]
+    for path in candidate_paths:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
 
 def generate_leaderboard_image(top_users):
     # Image dimensions
@@ -28,16 +53,9 @@ def generate_leaderboard_image(top_users):
     draw = ImageDraw.Draw(img)
     
     # Load fonts
-    font_path = "Poppins-SemiBold.ttf"
-    try:
-        title_font = ImageFont.truetype(font_path, 40)
-        name_font = ImageFont.truetype(font_path, 32)
-        points_font = ImageFont.truetype(font_path, 28)
-    except IOError:
-        # Fallback
-        title_font = ImageFont.load_default()
-        name_font = ImageFont.load_default()
-        points_font = ImageFont.load_default()
+    title_font = get_font(40)
+    name_font = get_font(32)
+    points_font = get_font(28)
 
     # Draw header
     with Pilmoji(img) as pilmoji:
@@ -123,17 +141,11 @@ def generate_giveaway_image(top_confessions):
     img = Image.new('RGB', (width, height), bg_color)
     draw = ImageDraw.Draw(img)
     
-    font_path = "Poppins-SemiBold.ttf"
-    try:
-        title_font = ImageFont.truetype(font_path, 38)
-        name_font = ImageFont.truetype(font_path, 28)
-        sub_font = ImageFont.truetype(font_path, 20)
-        pts_font = ImageFont.truetype(font_path, 26)
-    except IOError:
-        title_font = ImageFont.load_default()
-        name_font = ImageFont.load_default()
-        sub_font = ImageFont.load_default()
-        pts_font = ImageFont.load_default()
+    # Load fonts
+    title_font = get_font(38)
+    name_font = get_font(28)
+    sub_font = get_font(20)
+    pts_font = get_font(26)
 
     with Pilmoji(img) as pilmoji:
         title_text = "🎁 Giveaway Leaderboard 🏆"
