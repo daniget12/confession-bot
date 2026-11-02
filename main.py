@@ -44,6 +44,11 @@ CATEGORIES = [
 POINTS_PER_CONFESSION = 1
 POINTS_PER_LIKE_RECEIVED = 1
 POINTS_PER_DISLIKE_RECEIVED = -1
+POINTS_PER_LAUGH_RECEIVED = 1
+
+EMOJI_ID_LIKE = "5440384032451877242"
+EMOJI_ID_DISLIKE = "5380046837229039430"
+EMOJI_ID_LAUGH = "5373329319399529171"
 MAX_CATEGORIES = 3
 MAX_PHOTO_SIZE_MB = 5
 MAX_VIDEO_SIZE_MB = 50
@@ -826,13 +831,14 @@ def create_category_keyboard(selected_categories: List[str] = None):
     builder.row(InlineKeyboardButton(text="✖️ Cancel Selection", callback_data="category_cancel"))
     return builder.as_markup()
 
-async def get_comment_reactions(comment_id: int) -> Tuple[int, int]:
+async def get_comment_reactions(comment_id: int) -> Tuple[int, int, int]:
     row = await fetch_one(
         "SELECT COALESCE(SUM(CASE WHEN reaction_type = 'like' THEN 1 ELSE 0 END), 0) AS likes, "
-        "COALESCE(SUM(CASE WHEN reaction_type = 'dislike' THEN 1 ELSE 0 END), 0) AS dislikes "
+        "COALESCE(SUM(CASE WHEN reaction_type = 'dislike' THEN 1 ELSE 0 END), 0) AS dislikes, "
+        "COALESCE(SUM(CASE WHEN reaction_type = 'laugh' THEN 1 ELSE 0 END), 0) AS laughs "
         "FROM reactions WHERE comment_id = $1", comment_id
     )
-    return (row['likes'], row['dislikes']) if row else (0, 0)
+    return (row['likes'], row['dislikes'], row['laughs']) if row else (0, 0, 0)
 
 async def get_user_points(user_id: int) -> int:
     row = await fetch_one("SELECT points FROM user_points WHERE user_id = $1", user_id)
@@ -854,22 +860,23 @@ async def update_user_points(user_id: int, delta: int):
             last_updated_month = $3
     """, user_id, delta, current_month)
 async def build_comment_keyboard(comment_id: int, commenter_user_id: int, viewer_user_id: int, confession_owner_id: int, is_admin: bool = False):
-    likes, dislikes = await get_comment_reactions(comment_id)
+    likes, dislikes, laughs = await get_comment_reactions(comment_id)
     builder = InlineKeyboardBuilder()
     
     # Only reactions and reply - NO profile, NO report, NO contact request
     if commenter_user_id != viewer_user_id:
-        builder.button(text=f"{likes}", icon_custom_emoji_id="5440384032451877242", callback_data=f"react_like_{comment_id}")
-        builder.button(text=f"{dislikes}", icon_custom_emoji_id="5380046837229039430", callback_data=f"react_dislike_{comment_id}")
+        builder.button(text=f"{likes}", icon_custom_emoji_id=EMOJI_ID_LIKE, callback_data=f"react_like_{comment_id}")
+        builder.button(text=f"{dislikes}", icon_custom_emoji_id=EMOJI_ID_DISLIKE, callback_data=f"react_dislike_{comment_id}")
+        builder.button(text=f"{laughs}", icon_custom_emoji_id=EMOJI_ID_LAUGH, callback_data=f"react_laugh_{comment_id}")
     else:
-        builder.button(text=f"{likes}", icon_custom_emoji_id="5440384032451877242", callback_data="noop")
-        builder.button(text=f"{dislikes}", icon_custom_emoji_id="5380046837229039430", callback_data="noop")
+        builder.button(text=f"{likes}", icon_custom_emoji_id=EMOJI_ID_LIKE, callback_data="noop")
+        builder.button(text=f"{dislikes}", icon_custom_emoji_id=EMOJI_ID_DISLIKE, callback_data="noop")
+        builder.button(text=f"{laughs}", icon_custom_emoji_id=EMOJI_ID_LAUGH, callback_data="noop")
     
     builder.button(text="Reply", icon_custom_emoji_id="5258132936401624790", callback_data=f"reply_{comment_id}")
     
-    # REMOVED: Report button and Contact Request button
-    # Now just 3 buttons in one row
-    builder.adjust(3)
+    # 4 buttons in row: like, dislike, laugh, reply
+    builder.adjust(4)
     
     return builder.as_markup()
 
@@ -1002,16 +1009,17 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
         reactions_rows = await execute_query("""
             SELECT comment_id, 
                    COALESCE(SUM(CASE WHEN reaction_type = 'like' THEN 1 ELSE 0 END), 0) as likes,
-                   COALESCE(SUM(CASE WHEN reaction_type = 'dislike' THEN 1 ELSE 0 END), 0) as dislikes
+                   COALESCE(SUM(CASE WHEN reaction_type = 'dislike' THEN 1 ELSE 0 END), 0) as dislikes,
+                   COALESCE(SUM(CASE WHEN reaction_type = 'laugh' THEN 1 ELSE 0 END), 0) as laughs
             FROM reactions
             WHERE comment_id = ANY($1::int[])
             GROUP BY comment_id
         """, comment_ids)
     
-    # Build a map of comment_id -> (likes, dislikes)
+    # Build a map of comment_id -> (likes, dislikes, laughs)
     reaction_map = {}
     for row in reactions_rows:
-        reaction_map[row['comment_id']] = (row['likes'], row['dislikes'])
+        reaction_map[row['comment_id']] = (row['likes'], row['dislikes'], row['laughs'])
     
     if not comments_raw:
         await safe_send_message(user_id, f"<i>No comments on page {page}.</i>")
@@ -1026,7 +1034,7 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
             sent_message = await send_single_comment_ordered(
                 user_id, i, c_data, confession_id, confession_owner_id,
                 users_info, offset, is_admin_user, page, total_pages,
-                reaction_map.get(c_data['id'], (0, 0)),
+                reaction_map.get(c_data['id'], (0, 0, 0)),
                 message_id_map  # Pass the map of parent message IDs
             )
             
@@ -1050,7 +1058,7 @@ async def show_comments_for_confession(user_id: int, confession_id: int, message
 async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, confession_id: int, 
                                       confession_owner_id: int, users_info: dict, offset: int, 
                                       is_admin_user: bool, page: int, total_pages: int,
-                                      reaction_counts: Tuple[int, int],
+                                      reaction_counts: Tuple[int, int, int],
                                       message_id_map: Dict[int, int]) -> Optional[types.Message]:
     """Send a single comment in order with proper reply threading"""
     seq_num = offset + index + 1
@@ -1084,18 +1092,20 @@ async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, co
     admin_info = f" [UID: <code>{commenter_uid}</code>]" if is_admin_user else ""
     
     # Build keyboard with reactions
-    likes, dislikes = reaction_counts
+    likes, dislikes, laughs = reaction_counts
     builder = InlineKeyboardBuilder()
     
     if commenter_uid != user_id:
-        builder.button(text=f"{likes}", icon_custom_emoji_id="5440384032451877242", callback_data=f"react_like_{db_id}")
-        builder.button(text=f"{dislikes}", icon_custom_emoji_id="5380046837229039430", callback_data=f"react_dislike_{db_id}")
+        builder.button(text=f"{likes}", icon_custom_emoji_id=EMOJI_ID_LIKE, callback_data=f"react_like_{db_id}")
+        builder.button(text=f"{dislikes}", icon_custom_emoji_id=EMOJI_ID_DISLIKE, callback_data=f"react_dislike_{db_id}")
+        builder.button(text=f"{laughs}", icon_custom_emoji_id=EMOJI_ID_LAUGH, callback_data=f"react_laugh_{db_id}")
     else:
-        builder.button(text=f"{likes}", icon_custom_emoji_id="5440384032451877242", callback_data="noop")
-        builder.button(text=f"{dislikes}", icon_custom_emoji_id="5380046837229039430", callback_data="noop")
+        builder.button(text=f"{likes}", icon_custom_emoji_id=EMOJI_ID_LIKE, callback_data="noop")
+        builder.button(text=f"{dislikes}", icon_custom_emoji_id=EMOJI_ID_DISLIKE, callback_data="noop")
+        builder.button(text=f"{laughs}", icon_custom_emoji_id=EMOJI_ID_LAUGH, callback_data="noop")
     
     builder.button(text="Reply", icon_custom_emoji_id="5258132936401624790", callback_data=f"reply_{db_id}")
-    builder.adjust(3)
+    builder.adjust(4)
     keyboard = builder.as_markup()
     
     # Determine reply-to message for native Telegram threading
@@ -3343,6 +3353,10 @@ async def react_like(callback_query: types.CallbackQuery):
 async def react_dislike(callback_query: types.CallbackQuery):
     await handle_reaction(callback_query, "dislike")
 
+@dp.callback_query(F.data.startswith("react_laugh_"))
+async def react_laugh(callback_query: types.CallbackQuery):
+    await handle_reaction(callback_query, "laugh")
+
 async def handle_reaction(callback_query: types.CallbackQuery, reaction_type: str):
     comment_id = int(callback_query.data.split("_")[-1])
     user_id = callback_query.from_user.id
@@ -3357,26 +3371,35 @@ async def handle_reaction(callback_query: types.CallbackQuery, reaction_type: st
     if comment_owner_id == user_id:
         await callback_query.answer("You cannot react to your own comment.", show_alert=True)
         return
+
+    def get_points_for_reaction(rtype: str) -> int:
+        if rtype == "like":
+            return POINTS_PER_LIKE_RECEIVED
+        elif rtype == "dislike":
+            return POINTS_PER_DISLIKE_RECEIVED
+        elif rtype == "laugh":
+            return POINTS_PER_LAUGH_RECEIVED
+        return 0
     
     existing = await fetch_one("SELECT reaction_type FROM reactions WHERE comment_id = $1 AND user_id = $2", comment_id, user_id)
     
     if existing:
         if existing['reaction_type'] == reaction_type:
             await execute_update("DELETE FROM reactions WHERE comment_id = $1 AND user_id = $2", comment_id, user_id)
-            points_change = -POINTS_PER_LIKE_RECEIVED if reaction_type == "like" else -POINTS_PER_DISLIKE_RECEIVED
+            points_change = -get_points_for_reaction(reaction_type)
             await update_user_points(comment_owner_id, points_change)
         else:
-            old_points = POINTS_PER_LIKE_RECEIVED if existing['reaction_type'] == "like" else POINTS_PER_DISLIKE_RECEIVED
+            old_points = get_points_for_reaction(existing['reaction_type'])
             await update_user_points(comment_owner_id, -old_points)
             await execute_update("UPDATE reactions SET reaction_type = $1 WHERE comment_id = $2 AND user_id = $3", reaction_type, comment_id, user_id)
-            new_points = POINTS_PER_LIKE_RECEIVED if reaction_type == "like" else POINTS_PER_DISLIKE_RECEIVED
+            new_points = get_points_for_reaction(reaction_type)
             await update_user_points(comment_owner_id, new_points)
     else:
         await execute_update("INSERT INTO reactions (comment_id, user_id, reaction_type) VALUES ($1, $2, $3)", comment_id, user_id, reaction_type)
-        points_change = POINTS_PER_LIKE_RECEIVED if reaction_type == "like" else POINTS_PER_DISLIKE_RECEIVED
+        points_change = get_points_for_reaction(reaction_type)
         await update_user_points(comment_owner_id, points_change)
 
-        # --- NEW: Notify comment owner about like (only when new like) ---
+        # Notify comment owner about reaction (only when new)
         if reaction_type == "like":
             liker_name = await get_profile_name(user_id)
             notification = (
@@ -3385,9 +3408,16 @@ async def handle_reaction(callback_query: types.CallbackQuery, reaction_type: st
                 f"Keep sharing your thoughts!"
             )
             await safe_send_message(comment_owner_id, notification)
+        elif reaction_type == "laugh":
+            liker_name = await get_profile_name(user_id)
+            notification = (
+                f"😂 <b>Someone reacted with laugh to your comment!</b>\n\n"
+                f"<b>{liker_name}</b> reacted with laugh to your comment.\n\n"
+                f"Keep sharing your thoughts!"
+            )
+            await safe_send_message(comment_owner_id, notification)
     
-    # ... rest of the function (update UI, etc.) unchanged ...
-    likes, dislikes = await get_comment_reactions(comment_id)
+    likes, dislikes, laughs = await get_comment_reactions(comment_id)
     
     message = callback_query.message
     if message and message.reply_markup:
@@ -3398,11 +3428,17 @@ async def handle_reaction(callback_query: types.CallbackQuery, reaction_type: st
             for button in row:
                 text = button.text
                 callback_data = button.callback_data
+                icon_emoji = getattr(button, 'icon_custom_emoji_id', None)
                 if callback_data == f"react_like_{comment_id}":
-                    text = f"👍  {likes}"
+                    text = f"{likes}"
+                    icon_emoji = EMOJI_ID_LIKE
                 elif callback_data == f"react_dislike_{comment_id}":
-                    text = f"👎  {dislikes}"
-                new_row.append(InlineKeyboardButton(text=text, callback_data=callback_data))
+                    text = f"{dislikes}"
+                    icon_emoji = EMOJI_ID_DISLIKE
+                elif callback_data == f"react_laugh_{comment_id}":
+                    text = f"{laughs}"
+                    icon_emoji = EMOJI_ID_LAUGH
+                new_row.append(InlineKeyboardButton(text=text, callback_data=callback_data, icon_custom_emoji_id=icon_emoji))
             new_inline_keyboard.append(new_row)
         new_keyboard = InlineKeyboardMarkup(inline_keyboard=new_inline_keyboard)
         try:
@@ -3411,7 +3447,8 @@ async def handle_reaction(callback_query: types.CallbackQuery, reaction_type: st
             if "message is not modified" not in str(e):
                 logger.error(f"Error updating reaction UI: {e}")
     
-    await callback_query.answer(f"{'👍' if reaction_type == 'like' else '👎'} reaction updated!")
+    emoji_icon = "👍" if reaction_type == "like" else ("👎" if reaction_type == "dislike" else "😂")
+    await callback_query.answer(f"{emoji_icon} reaction updated!")
 
 @dp.callback_query(F.data.startswith("report_confirm_"))
 async def report_confirm(callback_query: types.CallbackQuery):
