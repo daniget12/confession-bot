@@ -866,12 +866,12 @@ async def build_comment_keyboard(comment_id: int, commenter_user_id: int, viewer
     # Only reactions and reply - NO profile, NO report, NO contact request
     if commenter_user_id != viewer_user_id:
         builder.button(text=f"{likes}", icon_custom_emoji_id=EMOJI_ID_LIKE, callback_data=f"react_like_{comment_id}")
-        builder.button(text=f"{dislikes}", icon_custom_emoji_id=EMOJI_ID_DISLIKE, callback_data=f"react_dislike_{comment_id}")
         builder.button(text=f"{laughs}", icon_custom_emoji_id=EMOJI_ID_LAUGH, callback_data=f"react_laugh_{comment_id}")
+        builder.button(text=f"{dislikes}", icon_custom_emoji_id=EMOJI_ID_DISLIKE, callback_data=f"react_dislike_{comment_id}")
     else:
         builder.button(text=f"{likes}", icon_custom_emoji_id=EMOJI_ID_LIKE, callback_data="noop")
-        builder.button(text=f"{dislikes}", icon_custom_emoji_id=EMOJI_ID_DISLIKE, callback_data="noop")
         builder.button(text=f"{laughs}", icon_custom_emoji_id=EMOJI_ID_LAUGH, callback_data="noop")
+        builder.button(text=f"{dislikes}", icon_custom_emoji_id=EMOJI_ID_DISLIKE, callback_data="noop")
     
     builder.button(text="Reply", icon_custom_emoji_id="5258132936401624790", callback_data=f"reply_{comment_id}")
     
@@ -1097,12 +1097,12 @@ async def send_single_comment_ordered(user_id: int, index: int, c_data: dict, co
     
     if commenter_uid != user_id:
         builder.button(text=f"{likes}", icon_custom_emoji_id=EMOJI_ID_LIKE, callback_data=f"react_like_{db_id}")
-        builder.button(text=f"{dislikes}", icon_custom_emoji_id=EMOJI_ID_DISLIKE, callback_data=f"react_dislike_{db_id}")
         builder.button(text=f"{laughs}", icon_custom_emoji_id=EMOJI_ID_LAUGH, callback_data=f"react_laugh_{db_id}")
+        builder.button(text=f"{dislikes}", icon_custom_emoji_id=EMOJI_ID_DISLIKE, callback_data=f"react_dislike_{db_id}")
     else:
         builder.button(text=f"{likes}", icon_custom_emoji_id=EMOJI_ID_LIKE, callback_data="noop")
-        builder.button(text=f"{dislikes}", icon_custom_emoji_id=EMOJI_ID_DISLIKE, callback_data="noop")
         builder.button(text=f"{laughs}", icon_custom_emoji_id=EMOJI_ID_LAUGH, callback_data="noop")
+        builder.button(text=f"{dislikes}", icon_custom_emoji_id=EMOJI_ID_DISLIKE, callback_data="noop")
     
     builder.button(text="Reply", icon_custom_emoji_id="5258132936401624790", callback_data=f"reply_{db_id}")
     builder.adjust(4)
